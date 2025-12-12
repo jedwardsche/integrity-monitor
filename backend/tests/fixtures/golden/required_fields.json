@@ -1,0 +1,10 @@
+[
+  {
+    "description": "Email is required for students",
+    "entity": "students",
+    "issue_type": "missing_field",
+    "record_id": "recStudent5",
+    "rule_id": "required.students.Email",
+    "severity": "warning"
+  }
+]

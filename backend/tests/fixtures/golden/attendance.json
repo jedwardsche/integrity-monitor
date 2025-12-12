@@ -1,0 +1,18 @@
+[
+  {
+    "description": "Absence Rate 30D is 1.00 (threshold 0.25).",
+    "entity": "student",
+    "issue_type": "attendance",
+    "record_id": "recStudent1",
+    "rule_id": "attendance.absence_rate_30d",
+    "severity": "critical"
+  },
+  {
+    "description": "Consecutive Absences is 5.00 (threshold 5.0).",
+    "entity": "student",
+    "issue_type": "attendance",
+    "record_id": "recStudent1",
+    "rule_id": "attendance.consecutive_absences",
+    "severity": "critical"
+  }
+]

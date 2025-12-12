@@ -1,0 +1,10 @@
+[
+  {
+    "description": "Student must have at least one parent",
+    "entity": "students",
+    "issue_type": "missing_link",
+    "record_id": "recStudent4",
+    "rule_id": "link.students.Parents.min",
+    "severity": "warning"
+  }
+]
