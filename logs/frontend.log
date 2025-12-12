@@ -1,0 +1,10 @@
+
+> frontend@0.0.0 dev
+> vite
+
+
+  ROLLDOWN-VITE v7.2.2  ready in 359 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: use --host to expose
+2:49:16 PM [vite] (client) hmr update /src/components/AuthGuard.tsx, /src/index.css

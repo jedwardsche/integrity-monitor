@@ -1,0 +1,82 @@
+[
+  {
+    "id": "recAtt1",
+    "fields": {
+      "Student": ["recStudent1"],
+      "Class": ["recClass1"],
+      "Date": "2024-01-15",
+      "Status": "Absent",
+      "Minutes Attended": 0
+    }
+  },
+  {
+    "id": "recAtt2",
+    "fields": {
+      "Student": ["recStudent1"],
+      "Class": ["recClass1"],
+      "Date": "2024-01-16",
+      "Status": "Absent",
+      "Minutes Attended": 0
+    }
+  },
+  {
+    "id": "recAtt3",
+    "fields": {
+      "Student": ["recStudent1"],
+      "Class": ["recClass1"],
+      "Date": "2024-01-17",
+      "Status": "Absent",
+      "Minutes Attended": 0
+    }
+  },
+  {
+    "id": "recAtt4",
+    "fields": {
+      "Student": ["recStudent1"],
+      "Class": ["recClass1"],
+      "Date": "2024-01-18",
+      "Status": "Absent",
+      "Minutes Attended": 0
+    }
+  },
+  {
+    "id": "recAtt5",
+    "fields": {
+      "Student": ["recStudent1"],
+      "Class": ["recClass1"],
+      "Date": "2024-01-19",
+      "Status": "Absent",
+      "Minutes Attended": 0
+    }
+  },
+  {
+    "id": "recAtt6",
+    "fields": {
+      "Student": ["recStudent2"],
+      "Class": ["recClass1"],
+      "Date": "2024-01-15",
+      "Status": "Present",
+      "Minutes Attended": 60
+    }
+  },
+  {
+    "id": "recAtt7",
+    "fields": {
+      "Student": ["recStudent3"],
+      "Class": ["recClass2"],
+      "Date": "2024-01-20",
+      "Status": "Tardy",
+      "Minutes Attended": 45
+    }
+  },
+  {
+    "id": "recAtt8",
+    "fields": {
+      "Student": ["recStudent4"],
+      "Class": ["recClass1"],
+      "Date": "2024-01-15",
+      "Status": "Present",
+      "Minutes Attended": 30
+    }
+  }
+]

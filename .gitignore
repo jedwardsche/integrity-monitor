@@ -1,0 +1,7 @@
+node_modules/
+.venv/
+.firebase/
+dist/
+.dev-pids
+.backend.log
+.frontend.log

@@ -1,0 +1,10 @@
+[
+  {
+    "description": "Student duplicate group with 2 records (primary recStudent2).",
+    "entity": "student",
+    "issue_type": "duplicate",
+    "record_id": "recStudent2",
+    "rule_id": "dup.student.phone_name",
+    "severity": "warning"
+  }
+]

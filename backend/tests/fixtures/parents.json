@@ -1,0 +1,42 @@
+[
+  {
+    "id": "recParent1",
+    "fields": {
+      "Name": "Robert Smith",
+      "Email": "robert.smith@example.com",
+      "Phone": "(555) 111-2222",
+      "Students": ["recStudent1", "recStudent2"],
+      "Address ZIP": "12345"
+    }
+  },
+  {
+    "id": "recParent2",
+    "fields": {
+      "Name": "Jane Doe Parent",
+      "Email": "jane.parent@example.com",
+      "Phone": "(555) 333-4444",
+      "Students": ["recStudent3"],
+      "Address ZIP": "67890"
+    }
+  },
+  {
+    "id": "recParent3",
+    "fields": {
+      "Name": "Michael Johnson",
+      "Email": "michael.j@example.com",
+      "Phone": "",
+      "Students": ["recStudent5"],
+      "Address ZIP": ""
+    }
+  },
+  {
+    "id": "recParent4",
+    "fields": {
+      "Name": "Orphan Parent",
+      "Email": "orphan@example.com",
+      "Phone": "(555) 999-8888",
+      "Students": [],
+      "Address ZIP": "11111"
+    }
+  }
+]
