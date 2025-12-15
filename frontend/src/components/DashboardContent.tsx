@@ -1,8 +1,8 @@
-import React, { useMemo } from 'react';
-import { useIntegrityMetrics } from '../hooks/useIntegrityMetrics';
-import type { RunHistoryItem } from '../hooks/useFirestoreRuns';
-import { IssueList } from './IssueList';
-import { getDataIssuesLink } from '../utils/airtable';
+import { useMemo } from "react";
+import { useIntegrityMetrics } from "../hooks/useIntegrityMetrics";
+import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
+import { IssueList } from "./IssueList";
+import { getDataIssuesLink } from "../utils/airtable";
 
 type DashboardContentProps = {
   integrityMetrics: ReturnType<typeof useIntegrityMetrics>;
@@ -23,7 +23,7 @@ export function DashboardContent({
   onCloseQueue,
   onSelectRun,
 }: DashboardContentProps) {
-  const { summary, runs, trends, queues, derived, flaggedRules, kpi } =
+  const { summary, runs, trends, queues, derived, flaggedRules } =
     integrityMetrics;
 
   // Map queue titles to filter types
@@ -53,21 +53,40 @@ export function DashboardContent({
 
     if (lastRun && summary.data?.last_run_time) {
       const runDate = new Date(summary.data.last_run_time);
-      lastRunTime = runDate.toLocaleTimeString("en-US", {
+      const timeStr = runDate.toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
       });
+      const dateStr = runDate.toLocaleDateString("en-US", {
+        month: "numeric",
+        day: "numeric",
+      });
+      lastRunTime = `${timeStr} ${dateStr}`;
+
       lastRunBadge =
-        summary.data.last_run?.mode === "full" ? "Weekly" : "Nightly";
+        "Frequency: " +
+        (summary.data.last_run?.mode === "full" ? "Weekly" : "Nightly");
       const duration = summary.data.last_run_duration;
       if (duration) {
         const minutes = Math.floor(duration / 60000);
         const seconds = Math.floor((duration % 60000) / 1000);
-        lastRunContext = `Duration ${minutes}m ${seconds}s`;
+        lastRunContext = `Length ${minutes}m ${seconds}s`;
       }
     }
 
     return [
+      {
+        label: "Data Completeness",
+        value: `${derived.data?.data_completeness?.toFixed(0) || 100}%`,
+        badge: `${derived.data?.link_health?.toFixed(0) || 100}% link health`,
+        context: "Required fields coverage",
+      },
+      {
+        label: "Last run",
+        value: lastRunTime,
+        badge: lastRunBadge,
+        context: lastRunContext,
+      },
       {
         label: "Open Issues",
         value: totalIssues.toString(),
@@ -78,22 +97,10 @@ export function DashboardContent({
         context: "Duplicates, broken links, attendance",
       },
       {
-        label: "Data Completeness",
-        value: `${derived.data?.data_completeness?.toFixed(0) || 100}%`,
-        badge: `${derived.data?.link_health?.toFixed(0) || 100}% link health`,
-        context: "Required fields coverage",
-      },
-      {
         label: "Critical records",
         value: criticalCount.toString(),
         badge: criticalCount > 0 ? "Needs outreach" : "None",
         context: "Attendance + billing gaps",
-      },
-      {
-        label: "Last run",
-        value: lastRunTime,
-        badge: lastRunBadge,
-        context: lastRunContext,
       },
     ];
   }, [summary, derived]);
@@ -143,22 +150,10 @@ export function DashboardContent({
     <>
       <section className="flex flex-col gap-6 lg:flex-row lg:items-stretch">
         <div className="flex-1 rounded-3xl border border-[var(--border)] bg-[var(--bg-light)] p-6 shadow-[0_30px_60px_rgba(31,79,72,0.08)]">
-          <p className="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">
-            Mission
+          <p className="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)] mb-4">
+            System Status
           </p>
-          <h1
-            className="mt-3 text-3xl font-semibold text-[var(--text-main)]"
-            style={{ fontFamily: "Outfit" }}
-          >
-            90% of anomalies caught before families notice.
-          </h1>
-          <p className="mt-3 text-[var(--text-muted)]">
-            Airtable is our source of truth. The monitor reviews Students,
-            Parents, Contractors, Classes, Attendance, and Payments nightly plus
-            weekly deep dives to surface duplicates, missing links, and
-            attendance risk.
-          </p>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             {summaryCards.map((card) => (
               <div
                 key={card.label}
@@ -180,74 +175,10 @@ export function DashboardContent({
               </div>
             ))}
           </div>
-          {kpi.data && kpi.data.latest && (
-            <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--bg-mid)]/70 p-4">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-[var(--text-muted)]">
-                  KPI Measurement
-                </p>
-                {kpi.data.latest.kpi_percent >= 90 ? (
-                  <span className="rounded-full bg-green-100 text-green-800 px-2 py-1 text-xs font-semibold">
-                    On Target
-                  </span>
-                ) : (
-                  <span className="rounded-full bg-[#ffecc7] text-[#b35300] px-2 py-1 text-xs font-semibold">
-                    Below Target
-                  </span>
-                )}
-              </div>
-              <p
-                className="text-3xl font-semibold"
-                style={{ fontFamily: "Outfit" }}
-              >
-                {kpi.data.latest.kpi_percent?.toFixed(1) || "0.0"}%
-              </p>
-              <p className="text-sm text-[var(--text-muted)] mt-1">
-                Target: 90%+ • Last measured:{" "}
-                {kpi.data.latest.measured_at
-                  ? new Date(kpi.data.latest.measured_at).toLocaleDateString()
-                  : "Never"}
-              </p>
-              {kpi.data.alerts && kpi.data.alerts.length > 0 && (
-                <div className="mt-3 space-y-1">
-                  {kpi.data.alerts.map((alert: any, idx: number) => (
-                    <p key={idx} className="text-xs text-[var(--text-muted)]">
-                      ⚠️ {alert.message}
-                    </p>
-                  ))}
-                </div>
-              )}
-              {kpi.data.trend && kpi.data.trend.length > 1 && (
-                <div className="mt-4">
-                  <p className="text-xs text-[var(--text-muted)] mb-2">
-                    8-week trend
-                  </p>
-                  <div className="flex items-end gap-1 h-16">
-                    {kpi.data.trend.slice(-8).map((point: any, idx: number) => {
-                      const height = Math.max(
-                        4,
-                        (point.kpi_percent / 100) * 64
-                      );
-                      return (
-                        <div
-                          key={idx}
-                          className="flex-1 rounded-t bg-[var(--brand)]"
-                          style={{ height: `${height}px` }}
-                          title={`${point.week_id}: ${point.kpi_percent}%`}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         <div className="w-full max-w-sm rounded-3xl border border-[var(--border)] bg-white p-6 shadow-[0_30px_60px_rgba(31,79,72,0.08)]">
-          <p className="text-sm text-[var(--text-muted)]">
-            Run Schedule
-          </p>
+          <p className="text-sm text-[var(--text-muted)]">Run Schedule</p>
           <div className="mt-4 space-y-4">
             <div>
               <p className="text-sm font-medium text-[var(--text-main)]">

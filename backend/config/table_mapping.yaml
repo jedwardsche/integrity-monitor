@@ -5,9 +5,9 @@ metadata:
 entity_table_mapping:
   students: "Students"
   parents: "Parents"
-  contractors: "Contractors"
+  contractors: "Contractors/Volunteers"
   classes: "Classes"
   attendance: "Attendance"
   truth: "Truth"
-  payments: "Payments"
-  data_issues: "Data Issues"
+  payments: "Contractor/Vendor Invoices"
+  data_issues: "Help Tickets"

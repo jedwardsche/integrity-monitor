@@ -76,21 +76,22 @@ def get_table_id_by_name(schema: Dict, table_name: str) -> Optional[str]:
 def discover_table_ids(
     schema_path: Optional[Path] = None,
     mapping_path: Optional[Path] = None,
-) -> Dict[str, str]:
-    """Discover table IDs from schema JSON using entity-to-table mapping.
+) -> Dict[str, Dict[str, str]]:
+    """Discover table IDs and base ID from schema JSON using entity-to-table mapping.
     
     Args:
         schema_path: Optional path to schema JSON (defaults to DEFAULT_SCHEMA_PATH)
         mapping_path: Optional path to mapping YAML (defaults to DEFAULT_MAPPING_PATH)
         
     Returns:
-        Dictionary mapping entity names to table IDs
-        
-    Example:
+        Dictionary with 'base_id' and 'table_ids' keys:
         {
-            "students": "tblFBuVmDQ8TRKbLY",
-            "parents": "tblXXXXX",
-            ...
+            "base_id": "appnol2rxwLMp4WfV",
+            "table_ids": {
+                "students": "tblFBuVmDQ8TRKbLY",
+                "parents": "tblXXXXX",
+                ...
+            }
         }
     """
     schema_file = schema_path or DEFAULT_SCHEMA_PATH
@@ -101,23 +102,28 @@ def discover_table_ids(
         mapping = load_mapping_config(mapping_file)
     except FileNotFoundError as exc:
         logger.error(f"Failed to load schema or mapping: {exc}")
-        return {}
+        return {"base_id": None, "table_ids": {}}
     except (json.JSONDecodeError, yaml.YAMLError) as exc:
         logger.error(f"Failed to parse schema or mapping: {exc}")
-        return {}
+        return {"base_id": None, "table_ids": {}}
     
-    discovered: Dict[str, str] = {}
+    # Extract base ID from schema
+    base_id = schema.get("baseId")
+    if not base_id:
+        logger.warning("No baseId found in schema JSON")
     
+    # Discover table IDs
+    table_ids: Dict[str, str] = {}
     for entity, table_name in mapping.items():
         table_id = get_table_id_by_name(schema, table_name)
         if table_id:
-            discovered[entity] = table_id
+            table_ids[entity] = table_id
             logger.debug(f"Discovered table ID for {entity}: {table_id} ({table_name})")
         else:
             logger.warning(f"Table '{table_name}' not found in schema for entity '{entity}'")
     
-    logger.info(f"Discovered {len(discovered)} table IDs from {len(mapping)} entities")
-    return discovered
+    logger.info(f"Discovered base ID: {base_id}, {len(table_ids)} table IDs from {len(mapping)} entities")
+    return {"base_id": base_id, "table_ids": table_ids}
 
 
 def validate_discovered_ids(
