@@ -1,10 +1,11 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import "./App.css";
 import { ProfileMenu } from "./components/ProfileMenu";
 import { ScanConfigModal, type ScanConfig } from "./components/ScanConfigModal";
 import { useAuth } from "./hooks/useAuth";
 import { useRunStatus } from "./hooks/useRunStatus";
+import { useFirestoreRuns } from "./hooks/useFirestoreRuns";
 import { ToastContainer } from "./components/Toast";
 import databaseSearchIcon from "./assets/database_search.svg";
 
@@ -19,6 +20,7 @@ interface AppProps {
 export default function App({ children }: AppProps) {
   const { getToken } = useAuth();
   const navigate = useNavigate();
+  const { data: runs, loading: runsLoading } = useFirestoreRuns(1);
 
   // Toast notification state
   const [toasts, setToasts] = useState<
@@ -156,6 +158,66 @@ export default function App({ children }: AppProps) {
       navigate(`/run/${currentRunId}`);
     }
   };
+
+  // Get last run info for status display
+  const lastRunInfo = useMemo(() => {
+    if (runsLoading || !runs || runs.length === 0) {
+      return null;
+    }
+
+    const lastRun = runs[0];
+    const runTime =
+      lastRun.started_at?.toDate?.() || lastRun.ended_at?.toDate?.() || null;
+
+    if (!runTime) {
+      return null;
+    }
+
+    const now = new Date();
+    const diffMs = now.getTime() - runTime.getTime();
+    const diffHours = diffMs / (1000 * 60 * 60);
+    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+
+    let timeDisplay: string;
+    if (diffHours < 1) {
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      timeDisplay = diffMins < 1 ? "Just now" : `${diffMins}m ago`;
+    } else if (diffHours < 24) {
+      timeDisplay = `${Math.floor(diffHours)}h ago`;
+    } else if (diffDays < 7) {
+      timeDisplay = `${Math.floor(diffDays)}d ago`;
+    } else {
+      // Show date and time for older runs
+      timeDisplay =
+        runTime.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        }) +
+        " " +
+        runTime.toLocaleTimeString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+    }
+
+    // Map status to display text and color
+    const statusText = lastRun.status || "Unknown";
+    const statusColor =
+      statusText === "Error"
+        ? "bg-red-500"
+        : statusText === "Warning"
+        ? "bg-yellow-500"
+        : statusText === "Running"
+        ? "bg-blue-500"
+        : "bg-[var(--brand)]";
+
+    return {
+      time: timeDisplay,
+      status: statusText,
+      statusColor,
+      runId: lastRun.run_id || lastRun.id,
+    };
+  }, [runs, runsLoading]);
   return (
     <div className="min-h-screen bg-[var(--bg-warm-light)] text-[var(--text-main)]">
       <header className="border-b border-[var(--border)] bg-[var(--bg-light)]/90">
@@ -220,10 +282,27 @@ export default function App({ children }: AppProps) {
             </nav>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--text-muted)]">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--brand)]" />
-              Last run 02:14 AM • Healthy
-            </div>
+            {runsLoading ? (
+              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--border)] animate-pulse" />
+                Loading...
+              </div>
+            ) : lastRunInfo ? (
+              <button
+                onClick={() => navigate(`/run/${lastRunInfo.runId}`)}
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1 hover:bg-white/90 transition-colors cursor-pointer"
+              >
+                <span
+                  className={`inline-block h-1.5 w-1.5 rounded-full ${lastRunInfo.statusColor}`}
+                />
+                Last run {lastRunInfo.time} • {lastRunInfo.status}
+              </button>
+            ) : (
+              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--border)]" />
+                No runs yet
+              </div>
+            )}
             <div className="flex gap-2 items-center">
               {runScanLoading && currentRunId ? (
                 <button

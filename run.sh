@@ -41,7 +41,7 @@ fi
 source .venv/bin/activate
 pip install -q -r requirements.txt
 cd "$PROJECT_ROOT"
-PYTHONPATH="$PROJECT_ROOT" uvicorn backend.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT > "$PROJECT_ROOT/.backend.log" 2>&1 &
+PYTHONPATH="$PROJECT_ROOT" uvicorn backend.main:app --reload --reload-exclude "*.venv/*" --reload-exclude "*/__pycache__/*" --reload-exclude "*/.git/*" --host 0.0.0.0 --port $BACKEND_PORT > "$PROJECT_ROOT/.backend.log" 2>&1 &
 BACKEND_PID=$!
 echo $BACKEND_PID >> "$PID_FILE"
 echo "Backend started (PID: $BACKEND_PID)"

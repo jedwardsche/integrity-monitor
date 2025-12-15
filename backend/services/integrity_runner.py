@@ -23,6 +23,8 @@ from ..utils.timing import timed
 from ..writers import airtable_writer
 from ..writers.firestore_writer import FirestoreWriter
 from ..services.feedback_analyzer import get_feedback_analyzer
+from ..services.table_id_discovery import discover_table_ids
+from ..services.config_updater import update_config
 
 logger = get_logger(__name__)
 
@@ -57,6 +59,49 @@ class IntegrityRunner:
         error_message: str | None = None
 
         logger.info("Integrity run started", extra={"run_id": run_id, "mode": mode, "trigger": trigger})
+
+        # Auto-discover table IDs before running scan
+        try:
+            discovered_ids = discover_table_ids()
+            if discovered_ids:
+                logger.info(
+                    "Discovered table IDs before scan",
+                    extra={"run_id": run_id, "discovered_count": len(discovered_ids)},
+                )
+                # Update config with discovered IDs (non-blocking)
+                try:
+                    update_results = update_config(
+                        discovered_ids,
+                        firestore_client=self._firestore_client,
+                        use_firestore=True,
+                    )
+                    env_updated = sum(1 for v in update_results.get("env", {}).values() if v)
+                    fs_updated = sum(1 for v in update_results.get("firestore", {}).values() if v)
+                    logger.info(
+                        "Updated config with discovered table IDs",
+                        extra={
+                            "run_id": run_id,
+                            "env_updates": env_updated,
+                            "firestore_updates": fs_updated,
+                        },
+                    )
+                    # Reload runtime config to pick up new table IDs
+                    self._runtime_config = load_runtime_config(firestore_client=self._firestore_client)
+                    self._airtable_client = AirtableClient(self._runtime_config.airtable)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to update config with discovered table IDs",
+                        extra={"run_id": run_id, "error": str(exc)},
+                    )
+                    # Continue with scan even if config update fails
+            else:
+                logger.debug("No table IDs discovered, using existing config", extra={"run_id": run_id})
+        except Exception as exc:
+            logger.warning(
+                "Table ID discovery failed, continuing with existing config",
+                extra={"run_id": run_id, "error": str(exc)},
+            )
+            # Don't fail the run if discovery fails
 
         # Write initial "running" status to Firestore immediately so frontend can see it
         try:
