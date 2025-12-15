@@ -7,7 +7,7 @@
 ```bash
 cd "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor"
 source backend/.venv/bin/activate
-uvicorn backend.main:app --reload --reload-exclude "*.venv/*" --reload-exclude "*/__pycache__/*" --reload-exclude "*/.git/*" --host 0.0.0.0 --port 8000
+uvicorn backend.main:app --reload --reload-exclude "**/.venv/**" --reload-exclude "**/__pycache__/**" --reload-exclude "**/.git/**" --reload-exclude "**/node_modules/**" --host 0.0.0.0 --port 8000
 ```
 
 The backend will start on http://localhost:8000
