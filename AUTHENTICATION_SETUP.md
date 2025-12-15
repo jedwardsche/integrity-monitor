@@ -5,6 +5,7 @@ This guide will help you set up Firebase Authentication for the CHE Data Integri
 ## Prerequisites
 
 You mentioned you've already:
+
 - ✅ Enabled Authentication API in Google Cloud
 - ✅ Enabled Authentication in Firebase Console
 - ✅ Enabled Google Sign-in and Email/Password in Firebase
@@ -38,10 +39,12 @@ gcloud projects get-iam-policy data-integrity-monitor \
 ```
 
 The service account should have:
+
 - `roles/firebase.admin` or
 - `roles/firebaseauth.admin`
 
 To add if missing:
+
 ```bash
 gcloud projects add-iam-policy-binding data-integrity-monitor \
   --member="serviceAccount:firebase-adminsdk-fbsvc@data-integrity-monitor.iam.gserviceaccount.com" \
@@ -63,6 +66,7 @@ curl http://localhost:8000/auth/dev-token?email=jedwards@che.school
 ```
 
 Expected success response:
+
 ```json
 {
   "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
@@ -72,6 +76,7 @@ Expected success response:
 ### 5. Test the Frontend Auto-Login
 
 1. Start the frontend dev server:
+
    ```bash
    cd frontend
    npm run dev
@@ -90,10 +95,11 @@ Expected success response:
 ### Error: "Failed to initialize Firebase Admin"
 
 **Solution:** Check that `GOOGLE_APPLICATION_CREDENTIALS` points to the correct service account file:
+
 ```bash
 cd backend
 cat .env | grep GOOGLE_APPLICATION_CREDENTIALS
-ls -la data-integrity-service-account.json
+ls -la data-integrity-service-account2.json
 ```
 
 ### Error: "Permission denied" when creating user
@@ -103,6 +109,7 @@ ls -la data-integrity-service-account.json
 ### Auto-login not working in frontend
 
 **Solution:**
+
 1. Check that backend is running on http://localhost:8000
 2. Open browser DevTools > Network tab
 3. Look for request to `/auth/dev-token`
@@ -111,13 +118,16 @@ ls -la data-integrity-service-account.json
 ## Security Note
 
 The `/auth/dev-token` endpoint is **development only** and is automatically disabled in production. It only works when:
+
 - `NODE_ENV` is not "production", OR
 - `ENVIRONMENT` environment variable is set to "dev", "development", or "local"
 
 ## Next Steps
 
 Once authentication is working:
+
 1. Create an admin user in Firestore:
+
    ```
    Collection: users
    Document ID: {your-user-uid}
