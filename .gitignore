@@ -5,3 +5,27 @@ dist/
 .dev-pids
 .backend.log
 .frontend.log
+
+# Environment files
+.env
+.env.*
+*.env
+!.env.example
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+frontend/.env.local
+
+# Google Cloud Service Account credentials
+*service*account*.json
+*service-account*.json
+*-service-account.json
+*credentials*.json
+*-credentials.json
+backend/data-integrity-service-account.json
+
+# Backup files
+*.backup
+*.bak
+.env.backup
