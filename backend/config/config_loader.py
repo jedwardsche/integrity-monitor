@@ -25,33 +25,41 @@ _discovered_ids_cache: Optional[Dict[str, str]] = None
 
 
 def _attempt_table_id_discovery(var_name: str) -> Optional[str]:
-    """Attempt to discover table ID for a missing environment variable.
+    """Attempt to discover table ID or base ID for a missing environment variable.
     
     Args:
-        var_name: Environment variable name (e.g., "AT_STUDENTS_TABLE")
+        var_name: Environment variable name (e.g., "AT_STUDENTS_TABLE" or "AT_STUDENTS_BASE")
         
     Returns:
-        Discovered table ID if found, None otherwise
+        Discovered ID if found, None otherwise
     """
     global _discovered_ids_cache
     
-    # Only attempt discovery for table ID variables (AT_*_TABLE)
-    if not var_name.startswith("AT_") or not var_name.endswith("_TABLE"):
+    # Only attempt discovery for Airtable variables (AT_*_TABLE or AT_*_BASE)
+    if not var_name.startswith("AT_") or not (var_name.endswith("_TABLE") or var_name.endswith("_BASE")):
         return None
     
-    # Extract entity name from var name (e.g., "AT_STUDENTS_TABLE" -> "students")
-    entity = var_name[3:-6].lower()  # Remove "AT_" prefix and "_TABLE" suffix
+    is_base = var_name.endswith("_BASE")
     
     try:
         # Use cached discovered IDs if available
         if _discovered_ids_cache is None:
             from ..services.table_id_discovery import discover_table_ids
-            _discovered_ids_cache = discover_table_ids()
+            discovery_result = discover_table_ids()
+            # Cache the full result
+            _discovered_ids_cache = discovery_result
         
-        # Return discovered ID for this entity if found
-        return _discovered_ids_cache.get(entity)
+        # Handle base ID discovery
+        if is_base:
+            return _discovered_ids_cache.get("base_id")
+        
+        # Handle table ID discovery
+        # Extract entity name from var name (e.g., "AT_STUDENTS_TABLE" -> "students")
+        entity = var_name[3:-6].lower()  # Remove "AT_" prefix and "_TABLE" suffix
+        table_ids = _discovered_ids_cache.get("table_ids", {})
+        return table_ids.get(entity)
     except Exception as exc:
-        logger.debug(f"Failed to discover table ID for {var_name}: {exc}")
+        logger.debug(f"Failed to discover ID for {var_name}: {exc}")
         return None
 
 
@@ -117,11 +125,36 @@ def _load_firestore_overrides(firestore_client: Optional[Any] = None) -> Dict[st
     Returns:
         Dict of override values, or empty dict if Firestore not available.
     """
+    # #region agent log
+    import json
+    import time
+    debug_log_path = '/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/.cursor/debug.log'
+    try:
+        with open(debug_log_path, 'a') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"config_loader.py:119","message":"_load_firestore_overrides entry","data":{"has_client":firestore_client is not None},"timestamp":int(time.time()*1000)})+'\n')
+    except: pass
+    # #endregion agent log
+    
     if firestore_client is None:
         return {}
     
     try:
+        # #region agent log
+        try:
+            with open(debug_log_path, 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"config_loader.py:132","message":"Before calling _get_client","data":{"step":"before_get_client"},"timestamp":int(time.time()*1000)})+'\n')
+        except: pass
+        # #endregion agent log
+        
         client = firestore_client._get_client()
+        
+        # #region agent log
+        try:
+            with open(debug_log_path, 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"config_loader.py:135","message":"After _get_client, before reading document","data":{"step":"after_get_client"},"timestamp":int(time.time()*1000)})+'\n')
+        except: pass
+        # #endregion agent log
+        
         config_doc_path = firestore_client._config.config_document
         # Parse document path (e.g., "integrity_config/current")
         parts = config_doc_path.split("/")
@@ -130,11 +163,32 @@ def _load_firestore_overrides(firestore_client: Optional[Any] = None) -> Dict[st
         
         collection_name, doc_id = parts
         doc_ref = client.collection(collection_name).document(doc_id)
+        
+        # #region agent log
+        try:
+            with open(debug_log_path, 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"config_loader.py:142","message":"Before doc.get() call","data":{"collection":collection_name,"doc_id":doc_id},"timestamp":int(time.time()*1000)})+'\n')
+        except: pass
+        # #endregion agent log
+        
         doc = doc_ref.get()
+        
+        # #region agent log
+        try:
+            with open(debug_log_path, 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"config_loader.py:149","message":"After doc.get() call","data":{"exists":doc.exists},"timestamp":int(time.time()*1000)})+'\n')
+        except: pass
+        # #endregion agent log
         
         if doc.exists:
             return doc.to_dict() or {}
-    except Exception:
+    except Exception as exc:
+        # #region agent log
+        try:
+            with open(debug_log_path, 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"config_loader.py:156","message":"Exception in _load_firestore_overrides","data":{"error":str(exc),"error_type":type(exc).__name__},"timestamp":int(time.time()*1000)})+'\n')
+        except: pass
+        # #endregion agent log
         # If Firestore is not available or document doesn't exist, return empty dict
         return {}
     
@@ -156,12 +210,15 @@ def _compute_config_version(yaml_content: str, override_content: Dict[str, Any])
 def load_runtime_config(
     path: Optional[Path] = None,
     firestore_client: Optional[Any] = None,
+    attempt_discovery: bool = False,
 ) -> RuntimeConfig:
     """Load runtime configuration from YAML file with optional Firestore overrides.
     
     Args:
         path: Optional path to rules.yaml file. Defaults to CONFIG_PATH.
         firestore_client: Optional FirestoreClient for loading overrides.
+        attempt_discovery: If True, attempt auto-discovery for missing table ID env vars.
+                          Defaults to False to avoid blocking during server startup.
     
     Returns:
         RuntimeConfig instance with resolved env placeholders and merged overrides.
@@ -173,8 +230,8 @@ def load_runtime_config(
         yaml_content = handle.read()
         data = yaml.safe_load(yaml_content)
     
-    # Resolve env() placeholders
-    data = _resolve_env_placeholders(data)
+    # Resolve env() placeholders (disable auto-discovery during startup by default)
+    data = _resolve_env_placeholders(data, attempt_discovery=attempt_discovery)
     
     # Load Firestore overrides
     overrides = _load_firestore_overrides(firestore_client)

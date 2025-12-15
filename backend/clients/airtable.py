@@ -51,12 +51,18 @@ class AirtableClient:
                 raise ImportError(
                     "pyairtable not installed. Install with: pip install pyairtable"
                 )
+            # Try PAT first (personal access token), fall back to API_KEY for backwards compatibility
+            pat = os.getenv("AIRTABLE_PAT")
             api_key = os.getenv("AIRTABLE_API_KEY")
-            if not api_key:
+            
+            if not pat and not api_key:
                 raise ValueError(
-                    "AIRTABLE_API_KEY environment variable not set"
+                    "AIRTABLE_PAT or AIRTABLE_API_KEY environment variable must be set"
                 )
-            self._api = Api(api_key)
+            
+            # Use PAT if available, otherwise use API_KEY
+            token = pat or api_key
+            self._api = Api(token)
         return self._api
 
     def _resolve_table(self, key: str) -> Dict[str, str]:
@@ -64,8 +70,26 @@ class AirtableClient:
         table_cfg = self._config.table(key)
         base_id = os.getenv(table_cfg.base_env)
         table_id = os.getenv(table_cfg.table_env)
+        
+        # #region agent log
+        import json as _json
+        import time as _time
+        debug_log_path = '/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/.cursor/debug.log'
+        try:
+            with open(debug_log_path, 'a') as f:
+                f.write(_json.dumps({"sessionId":"debug-session","runId":"scan","hypothesisId":"E","location":"airtable.py:65","message":"_resolve_table called","data":{"key":key,"base_var":table_cfg.base_env,"base_id":base_id,"table_var":table_cfg.table_env,"table_id":table_id},"timestamp":int(_time.time()*1000)})+'\n')
+        except: pass
+        # #endregion agent log
 
         if not base_id:
+            # #region agent log
+            try:
+                import json as _json
+                import time as _time
+                with open(debug_log_path, 'a') as f:
+                    f.write(_json.dumps({"sessionId":"debug-session","runId":"scan","hypothesisId":"E","location":"airtable.py:75","message":"Base ID missing, raising error","data":{"key":key,"base_var":table_cfg.base_env},"timestamp":int(_time.time()*1000)})+'\n')
+            except: pass
+            # #endregion agent log
             raise ValueError(
                 f"Environment variable {table_cfg.base_env} not set (required for {key})"
             )

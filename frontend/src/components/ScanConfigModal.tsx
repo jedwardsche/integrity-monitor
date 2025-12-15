@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useAuth } from "../hooks/useAuth";
+import type { AirtableSchema, AirtableTable } from "../utils/airtable";
 
 export interface ScanConfig {
   mode: "incremental" | "full";
@@ -8,6 +10,7 @@ export interface ScanConfig {
     required_fields: boolean;
     attendance: boolean;
   };
+  entities?: string[]; // Optional: selected entity names to scan
 }
 
 interface ScanConfigModalProps {
@@ -15,6 +18,27 @@ interface ScanConfigModalProps {
   onConfirm: (config: ScanConfig) => void;
   onCancel: () => void;
 }
+
+// Entity to table name mapping (from backend table_mapping.yaml)
+const ENTITY_TABLE_MAPPING: Record<string, string> = {
+  students: "Students",
+  parents: "Parents",
+  contractors: "Contractors/Volunteers",
+  classes: "Classes",
+  attendance: "Attendance",
+  truth: "Truth",
+  payments: "Contractor/Vendor Invoices",
+  data_issues: "Help Tickets",
+};
+
+// Reverse mapping: table name to entity
+const TABLE_ENTITY_MAPPING: Record<string, string> = Object.fromEntries(
+  Object.entries(ENTITY_TABLE_MAPPING).map(([entity, table]) => [table, entity])
+);
+
+const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined) ||
+  window.location.origin;
 
 export function ScanConfigModal({
   isOpen,
@@ -28,6 +52,81 @@ export function ScanConfigModal({
     required_fields: true,
     attendance: true,
   });
+  const [schema, setSchema] = useState<AirtableSchema | null>(null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [selectedEntities, setSelectedEntities] = useState<Set<string>>(
+    new Set(Object.keys(ENTITY_TABLE_MAPPING))
+  );
+  const { getToken } = useAuth();
+
+  // Fetch schema when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const loadSchema = async () => {
+      setSchemaLoading(true);
+      try {
+        const token = await getToken();
+        const response = await fetch(`${API_BASE}/airtable/schema`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setSchema(data);
+        } else {
+          // Fallback to local schema
+          const localResponse = await fetch("/airtable-schema.json");
+          if (localResponse.ok) {
+            const localData = await localResponse.json();
+            setSchema(localData);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load schema:", error);
+        // Try local fallback
+        try {
+          const localResponse = await fetch("/airtable-schema.json");
+          if (localResponse.ok) {
+            const localData = await localResponse.json();
+            setSchema(localData);
+          }
+        } catch (localError) {
+          console.error("Failed to load local schema:", localError);
+        }
+      } finally {
+        setSchemaLoading(false);
+      }
+    };
+
+    loadSchema();
+  }, [isOpen, getToken]);
+
+  // Map tables to entities
+  const entityTableMap = React.useMemo(() => {
+    if (!schema) return new Map<string, AirtableTable>();
+    
+    const map = new Map<string, AirtableTable>();
+    for (const table of schema.tables || []) {
+      const entity = TABLE_ENTITY_MAPPING[table.name];
+      if (entity) {
+        map.set(entity, table);
+      }
+    }
+    return map;
+  }, [schema]);
+
+  // Get available entities (those that have tables in schema)
+  const availableEntities = React.useMemo(() => {
+    return Array.from(entityTableMap.keys()).sort();
+  }, [entityTableMap]);
+
+  // Initialize selected entities when schema loads
+  useEffect(() => {
+    if (availableEntities.length > 0 && selectedEntities.size === Object.keys(ENTITY_TABLE_MAPPING).length) {
+      // Only auto-select all if we had all entities selected before
+      setSelectedEntities(new Set(availableEntities));
+    }
+  }, [availableEntities]);
 
   if (!isOpen) return null;
 
@@ -38,11 +137,36 @@ export function ScanConfigModal({
     }));
   };
 
+  const handleEntityToggle = (entity: string) => {
+    setSelectedEntities((prev) => {
+      const next = new Set(prev);
+      if (next.has(entity)) {
+        next.delete(entity);
+      } else {
+        next.add(entity);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllEntities = () => {
+    if (selectedEntities.size === availableEntities.length) {
+      setSelectedEntities(new Set());
+    } else {
+      setSelectedEntities(new Set(availableEntities));
+    }
+  };
+
   const handleConfirm = () => {
-    onConfirm({ mode, checks });
+    onConfirm({ 
+      mode, 
+      checks,
+      entities: selectedEntities.size > 0 ? Array.from(selectedEntities) : undefined,
+    });
   };
 
   const hasAtLeastOneCheck = Object.values(checks).some((v) => v);
+  const hasAtLeastOneEntity = selectedEntities.size > 0;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-0">

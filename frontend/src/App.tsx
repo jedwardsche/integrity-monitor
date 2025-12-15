@@ -8,6 +8,7 @@ import { useRunStatus } from "./hooks/useRunStatus";
 import { useFirestoreRuns } from "./hooks/useFirestoreRuns";
 import { ToastContainer } from "./components/Toast";
 import databaseSearchIcon from "./assets/database_search.svg";
+import scanDocumentIcon from "./assets/scan_document.svg";
 
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined) ||
@@ -103,6 +104,28 @@ export default function App({ children }: AppProps) {
         trigger: "manual",
       });
 
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "App.tsx:107",
+            message: "Before fetch request",
+            data: {
+              url: `${API_BASE}/integrity/run?${params.toString()}`,
+              hasToken: !!token,
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "fetch-attempt",
+            hypothesisId: "C",
+          }),
+        }
+      ).catch(() => {});
+      // #endregion agent log
+
       const response = await fetch(
         `${API_BASE}/integrity/run?${params.toString()}`,
         {
@@ -112,7 +135,31 @@ export default function App({ children }: AppProps) {
             "Content-Type": "application/json",
           },
         }
-      );
+      ).catch((error) => {
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "App.tsx:117",
+              message: "Fetch error caught",
+              data: {
+                error: error.message,
+                errorType: error.name,
+                errorStack: error.stack,
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "fetch-attempt",
+              hypothesisId: "C",
+            }),
+          }
+        ).catch(() => {});
+        // #endregion agent log
+        throw error;
+      });
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -316,8 +363,16 @@ export default function App({ children }: AppProps) {
                 <button
                   onClick={handleRunScanClick}
                   disabled={runScanLoading}
-                  className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-[var(--brand)] font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--brand)]/5 transition-colors"
+                  className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-[var(--brand)] font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--brand)]/5 transition-colors flex items-center justify-center gap-2"
                 >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 -960 960 960"
+                    className="w-4 h-4 flex-shrink-0"
+                    fill="currentColor"
+                  >
+                    <path d="M240-80q-33 0-56.5-23.5T160-160v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-80H240Zm-80-440v-280q0-33 23.5-56.5T240-880h320l240 240v120h-80v-80H520v-200H240v280h-80ZM40-360v-80h880v80H40Zm440-160Zm0 240Z" />
+                  </svg>
                   {runScanLoading ? "Starting..." : "Run scan"}
                 </button>
               )}

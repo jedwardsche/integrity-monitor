@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 try:
     from google.cloud import firestore
@@ -27,6 +27,16 @@ class FirestoreClient:
 
     def _get_client(self) -> firestore.Client:
         """Lazy initialization of Firestore client."""
+        # #region agent log
+        import json
+        import time
+        debug_log_path = '/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/.cursor/debug.log'
+        try:
+            with open(debug_log_path, 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"firestore.py:28","message":"_get_client called","data":{"has_client":self._client is not None},"timestamp":int(time.time()*1000)})+'\n')
+        except: pass
+        # #endregion agent log
+        
         if self._client is None:
             if firestore is None:
                 raise ImportError(
@@ -36,6 +46,13 @@ class FirestoreClient:
                 import os
                 from google.auth.exceptions import DefaultCredentialsError
                 from google.oauth2 import service_account
+                
+                # #region agent log
+                try:
+                    with open(debug_log_path, 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"firestore.py:40","message":"Before credential loading","data":{"step":"before_cred_load"},"timestamp":int(time.time()*1000)})+'\n')
+                except: pass
+                # #endregion agent log
                 
                 # Try to initialize with explicit credentials path if set
                 cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
@@ -52,8 +69,31 @@ class FirestoreClient:
                     
                     if os.path.exists(cred_path):
                         # Load credentials explicitly
+                        # #region agent log
+                        try:
+                            with open(debug_log_path, 'a') as f:
+                                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"firestore.py:55","message":"Before loading credentials file","data":{"cred_path":cred_path},"timestamp":int(time.time()*1000)})+'\n')
+                        except: pass
+                        # #endregion agent log
+                        
                         credentials = service_account.Credentials.from_service_account_file(cred_path)
+                        
+                        # #region agent log
+                        try:
+                            with open(debug_log_path, 'a') as f:
+                                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"firestore.py:58","message":"After loading credentials, before Firestore client init","data":{"step":"before_firestore_init"},"timestamp":int(time.time()*1000)})+'\n')
+                        except: pass
+                        # #endregion agent log
+                        
                         self._client = firestore.Client(credentials=credentials, project=credentials.project_id)
+                        
+                        # #region agent log
+                        try:
+                            with open(debug_log_path, 'a') as f:
+                                f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"firestore.py:61","message":"Firestore client initialized","data":{"step":"after_firestore_init"},"timestamp":int(time.time()*1000)})+'\n')
+                        except: pass
+                        # #endregion agent log
+                        
                         logger.info(f"Firestore client initialized with credentials from {cred_path}")
                     else:
                         logger.warning(
@@ -180,11 +220,12 @@ class FirestoreClient:
             )
             return None
 
-    def record_issues(self, issues: list[Dict[str, Any]]) -> None:
+    def record_issues(self, issues: list[Dict[str, Any]], progress_callback: Optional[Callable[[int, int, float], None]] = None) -> None:
         """Write individual issues to Firestore integrity_issues collection.
         
         Args:
             issues: List of issue dictionaries with rule_id, record_id, etc.
+            progress_callback: Optional callback function(current, total, percentage) called after each batch
         """
         if not issues:
             logger.info("No issues to write to Firestore")
@@ -197,6 +238,7 @@ class FirestoreClient:
             batch = client.batch()
             batch_count = 0
             total_written = 0
+            total_issues = len(issues)
             
             for issue in issues:
                 # Use rule_id + record_id as document ID for deduplication
@@ -240,10 +282,16 @@ class FirestoreClient:
                 if batch_count >= 500:
                     batch.commit()
                     total_written += batch_count
+                    percentage = (total_written / total_issues * 100) if total_issues > 0 else 0
                     logger.info(
                         "Wrote batch of issues to Firestore",
-                        extra={"batch_size": batch_count, "total_written": total_written},
+                        extra={"batch_size": batch_count, "total_written": total_written, "total": total_issues, "percentage": round(percentage, 1)},
                     )
+                    if progress_callback:
+                        try:
+                            progress_callback(total_written, total_issues, percentage)
+                        except Exception:
+                            pass  # Don't fail on progress callback errors
                     batch = client.batch()
                     batch_count = 0
             
@@ -251,6 +299,12 @@ class FirestoreClient:
             if batch_count > 0:
                 batch.commit()
                 total_written += batch_count
+                percentage = (total_written / total_issues * 100) if total_issues > 0 else 0
+                if progress_callback:
+                    try:
+                        progress_callback(total_written, total_issues, percentage)
+                    except Exception:
+                        pass  # Don't fail on progress callback errors
                 # Explicitly close batch (though Python GC handles it, this is cleaner)
                 batch = None
             
@@ -320,6 +374,87 @@ class FirestoreClient:
             logger.error(
                 "Failed to record KPI sample",
                 extra={"week_id": week_id, "error": str(exc)},
+                exc_info=True,
+            )
+            raise
+
+    def record_run_log(self, run_id: str, level: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Write a log entry to Firestore integrity_runs/{run_id}/logs subcollection.
+        
+        Args:
+            run_id: Run identifier
+            level: Log level (info, warning, error, debug)
+            message: Log message
+            metadata: Optional additional metadata
+        """
+        try:
+            client = self._get_client()
+            run_ref = client.collection(self._config.runs_collection).document(run_id)
+            logs_ref = run_ref.collection("logs")
+            
+            log_data: Dict[str, Any] = {
+                "level": level,
+                "message": message,
+                "timestamp": datetime.now(timezone.utc),
+            }
+            if metadata:
+                log_data.update(metadata)
+            
+            # Use auto-generated document ID (Firestore will create unique ID)
+            logs_ref.add(log_data)
+            
+            logger.debug(
+                "Recorded run log",
+                extra={"run_id": run_id, "level": level, "message": message[:100]},
+            )
+        except Exception as exc:
+            # Don't fail the scan if logging fails - just log to console
+            logger.warning(
+                "Failed to record run log",
+                extra={"run_id": run_id, "error": str(exc)},
+            )
+    
+    def delete_run(self, run_id: str) -> None:
+        """Delete a run and all its associated logs from Firestore.
+        
+        Args:
+            run_id: Run identifier to delete
+        """
+        try:
+            client = self._get_client()
+            run_ref = client.collection(self._config.runs_collection).document(run_id)
+            
+            # Delete all logs in the logs subcollection
+            logs_ref = run_ref.collection("logs")
+            logs = logs_ref.stream()
+            batch = client.batch()
+            batch_count = 0
+            
+            for log_doc in logs:
+                batch.delete(log_doc.reference)
+                batch_count += 1
+                
+                # Firestore batch limit is 500 operations
+                if batch_count >= 500:
+                    batch.commit()
+                    batch = client.batch()
+                    batch_count = 0
+            
+            # Commit remaining log deletions
+            if batch_count > 0:
+                batch.commit()
+            
+            # Delete the run document itself
+            run_ref.delete()
+            
+            logger.info(
+                "Deleted run and associated logs",
+                extra={"run_id": run_id, "collection": self._config.runs_collection},
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to delete run",
+                extra={"run_id": run_id, "error": str(exc)},
                 exc_info=True,
             )
             raise

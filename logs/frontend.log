@@ -3,7 +3,166 @@
 > vite
 
 
-  ROLLDOWN-VITE v7.2.2  ready in 275 ms
+  ROLLDOWN-VITE v7.2.2  ready in 198 ms
 
   ➜  Local:   http://localhost:5173/
   ➜  Network: use --host to expose
+3:57:04 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+3:57:09 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+3:57:16 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+3:58:35 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+3:58:35 PM [vite] Internal server error: Identifier `isRunning` has already been declared
+  Plugin: vite:oxc
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:17:8
+  `isRunning` has already been declared here
+  15 |    // Auto-scroll to bottom when new logs arrive (only when scan is running)
+  16 |    // Calculate isRunning safely - will be false if runStatus is not available yet
+  17 |    const isRunning = runStatus ? (runStatus.status === "running" || !runStatus.ended_at) : false;
+     |          ^^^^^^^^^
+  18 |    useEffect(() => {
+  19 |      if (logsEndRef.current && isRunning) {
+  It can not be redeclared here
+  68 |    }
+  69 |  
+  70 |    const isRunning = runStatus.status === "running" || !runStatus.ended_at;
+     |          ^^^^^^^^^
+  71 |    const startTime =
+  72 |      runStatus.started_at?.toDate?.() ||
+      at transformWithOxc (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:5138:19)
+      at async TransformPluginContext.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:5217:20)
+      at async EnvironmentPluginContainer.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30458:14)
+      at async loadAndTransform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:21576:26)
+      at async viteTransformMiddleware (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:26138:20)
+3:58:39 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+3:58:52 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+4:14:03 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+4:14:03 PM [vite] (client) Pre-transform error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+4:14:03 PM [vite] Internal server error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+      at TransformPluginContext._formatLog (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30669:43)
+      at TransformPluginContext.error (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30666:14)
+      at normalizeUrl (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28707:18)
+      at async file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28770:32
+      at async Promise.all (index 5)
+      at async TransformPluginContext.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28738:4)
+      at async EnvironmentPluginContainer.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30458:14)
+      at async loadAndTransform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:21576:26)
+4:14:06 PM [vite] (client) page reload src/pages/RunStatusPage.tsx
+4:14:07 PM [vite] (client) Pre-transform error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+4:14:07 PM [vite] (client) Pre-transform error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+4:14:07 PM [vite] (client) Pre-transform error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+4:14:07 PM [vite] Internal server error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+      at TransformPluginContext._formatLog (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30669:43)
+      at TransformPluginContext.error (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30666:14)
+      at normalizeUrl (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28707:18)
+      at async file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28770:32
+      at async Promise.all (index 5)
+      at async TransformPluginContext.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28738:4)
+      at async EnvironmentPluginContainer.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30458:14)
+      at async loadAndTransform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:21576:26)
+4:14:14 PM [vite] (client) page reload src/pages/RunStatusPage.tsx
+4:14:14 PM [vite] (client) Pre-transform error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+4:14:14 PM [vite] (client) Pre-transform error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+4:14:14 PM [vite] (client) Pre-transform error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+4:14:14 PM [vite] Internal server error: Failed to resolve import "../contexts/AuthContext" from "src/pages/RunStatusPage.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/frontend/src/pages/RunStatusPage.tsx:7:24
+  4  |  import { useRunLogs } from "../hooks/useRunLogs";
+  5  |  import { RunDetailModal } from "../components/RunDetailModal";
+  6  |  import { useAuth } from "../contexts/AuthContext";
+     |                           ^
+  7  |  var _jsxFileName = "/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-i...
+  8  |  import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
+      at TransformPluginContext._formatLog (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30669:43)
+      at TransformPluginContext.error (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30666:14)
+      at normalizeUrl (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28707:18)
+      at async file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28770:32
+      at async Promise.all (index 5)
+      at async TransformPluginContext.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:28738:4)
+      at async EnvironmentPluginContainer.transform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:30458:14)
+      at async loadAndTransform (file:///Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My%20Drive/CHE/che-data-integrity-monitor/frontend/node_modules/vite/dist/node/chunks/node.js:21576:26)
+4:14:18 PM [vite] (client) page reload src/pages/RunStatusPage.tsx
+4:14:31 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+4:14:31 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+4:15:25 PM [vite] (client) hmr update /src/pages/RunsPage.tsx, /src/index.css
+4:15:28 PM [vite] (client) hmr update /src/pages/RunsPage.tsx, /src/index.css
+4:15:39 PM [vite] (client) hmr update /src/pages/RunsPage.tsx, /src/index.css
+4:15:52 PM [vite] (client) hmr update /src/pages/RunsPage.tsx, /src/index.css
+4:16:00 PM [vite] (client) hmr update /src/pages/RunsPage.tsx, /src/index.css
+4:16:48 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+4:16:53 PM [vite] (client) hmr update /src/components/ScanConfigModal.tsx, /src/index.css
+4:16:54 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+4:16:54 PM [vite] (client) hmr update /src/pages/RunStatusPage.tsx, /src/index.css
+4:17:04 PM [vite] (client) hmr update /src/components/ScanConfigModal.tsx, /src/index.css
+4:17:10 PM [vite] (client) hmr update /src/components/ScanConfigModal.tsx, /src/index.css

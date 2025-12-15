@@ -1,0 +1,44 @@
+==========================================
+Restarting CHE Integrity Monitor Servers
+==========================================
+
+
+Stopping backend server...
+[1;33mKilling any existing backend processes...[0m
+[0;32m✓ Backend processes cleaned up[0m
+[0;32m✓ Port 8000 is already free[0m
+
+Stopping frontend server...
+[1;33mKilling processes on port 5173...[0m
+[0;32m✓ Port 5173 freed[0m
+
+==========================================
+Starting servers...
+==========================================
+
+Starting backend server...
+  Starting uvicorn server...
+  Started process with PID: 47766
+  Waiting for server to start...
+[0;32m✓ Backend server started on http://localhost:8000[0m
+  PID: 47766
+
+Starting frontend server...
+  Starting vite dev server...
+[0;32m✓ Frontend server started on http://localhost:5173[0m
+  PID: 47876
+
+==========================================
+✓ Servers restarted!
+==========================================
+
+Backend:  http://localhost:8000
+Frontend: http://localhost:5173
+
+Logs:
+  Backend:  tail -f /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/logs/backend.log
+  Frontend: tail -f /Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/logs/frontend.log
+
+To test authentication:
+  curl 'http://localhost:8000/auth/dev-token?email=jedwards@che.school'
+
