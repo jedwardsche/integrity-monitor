@@ -1,0 +1,13 @@
+metadata:
+  description: "Mapping from entity names to Airtable table names for automatic table ID discovery"
+  generated: "2025-12-12"
+
+entity_table_mapping:
+  students: "Students"
+  parents: "Parents"
+  contractors: "Contractors"
+  classes: "Classes"
+  attendance: "Attendance"
+  truth: "Truth"
+  payments: "Payments"
+  data_issues: "Data Issues"

@@ -45,13 +45,10 @@ export function SchemaPage() {
   const [summaryLoading, setSummaryLoading] = useState(true);
   const { getToken, user, loading: authLoading } = useAuth();
 
-  // Toast notification state
-  const [toasts, setToasts] = useState<
-    Array<{ id: string; message: string; type: "success" | "error" | "info" }>
-  >([]);
+  // Toast notification handler (no-op - toasts handled globally in App.tsx)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const addToast = (message: string, type: "success" | "error" | "info") => {
-    const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
+    // Toasts are handled globally, this is just a placeholder for AirtableSchemaView
   };
 
   useEffect(() => {
@@ -84,6 +81,42 @@ export function SchemaPage() {
           token || undefined
         );
         setSchema(data);
+
+        // Auto-discover table IDs after schema loads successfully
+        if (token && data) {
+          try {
+            const response = await fetch(
+              `${API_BASE}/airtable/schema/discover-table-ids`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+
+            if (response.ok) {
+              const result = await response.json();
+              if (result.success) {
+                const updatedCount = Object.values(
+                  result.updates?.env || {}
+                ).filter((v: any) => v).length;
+                if (updatedCount > 0) {
+                  addToast(
+                    `Discovered and updated ${updatedCount} table ID${
+                      updatedCount > 1 ? "s" : ""
+                    }`,
+                    "success"
+                  );
+                }
+              }
+            }
+          } catch (discoveryError) {
+            // Don't show error for auto-discovery failures - it's non-critical
+            console.debug("Table ID auto-discovery failed:", discoveryError);
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setSchemaError(message);

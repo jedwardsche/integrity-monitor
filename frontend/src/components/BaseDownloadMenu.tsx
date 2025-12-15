@@ -14,6 +14,7 @@ interface BaseDownloadMenuProps {
     },
     onProgress?: (progress: DownloadProgress) => void
   ) => void;
+  onCancel?: () => void;
   isLoading?: boolean;
 }
 
@@ -23,6 +24,7 @@ export function BaseDownloadMenu({
   baseId,
   onClose,
   onDownload,
+  onCancel,
   isLoading = false,
 }: BaseDownloadMenuProps) {
   const [selectedTables, setSelectedTables] = useState<Set<string>>(
@@ -33,6 +35,13 @@ export function BaseDownloadMenu({
   >(new Set(["tableIds"]));
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgress | null>(null);
+
+  // Reset progress when menu closes
+  useEffect(() => {
+    if (!isOpen) {
+      setDownloadProgress(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -89,13 +98,6 @@ export function BaseDownloadMenu({
       }
     );
   };
-
-  // Reset progress when menu closes
-  useEffect(() => {
-    if (!isOpen) {
-      setDownloadProgress(null);
-    }
-  }, [isOpen]);
 
   return (
     <div
@@ -228,13 +230,22 @@ export function BaseDownloadMenu({
         </div>
 
         <div className="mt-6 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] rounded-lg transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
+          {isLoading && onCancel ? (
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-200"
+            >
+              Cancel Download
+            </button>
+          ) : (
+            <button
+              onClick={onClose}
+              disabled={isLoading}
+              className="px-4 py-2 text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] rounded-lg transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          )}
           <button
             onClick={handleDownload}
             disabled={
@@ -277,20 +288,43 @@ export function BaseDownloadMenu({
                 <div className="text-xs font-medium text-[var(--text-muted)] mb-1">
                   Files prepared:
                 </div>
-                {downloadProgress.files.map((file, idx) => (
-                  <div
-                    key={idx}
-                    className="text-xs text-[var(--text-main)] flex items-center gap-2"
-                  >
-                    <span className="text-green-600">✓</span>
-                    <span>{file.name}</span>
-                    {file.size > 0 && (
-                      <span className="text-[var(--text-muted)]">
-                        ({(file.size / 1024).toFixed(1)} KB)
-                      </span>
-                    )}
-                  </div>
-                ))}
+                {[...downloadProgress.files].reverse().map((file, idx) => {
+                  // Check if this file is currently being processed
+                  // Match by sanitizing both names and checking if file name contains table name
+                  const sanitizeTableName = (name: string) =>
+                    name.toLowerCase().replace(/[^a-z0-9]/gi, "_");
+                  const sanitizedCurrentTable = downloadProgress.currentTable
+                    ? sanitizeTableName(downloadProgress.currentTable)
+                    : "";
+                  const sanitizedFileName = sanitizeTableName(file.name);
+
+                  const isProcessing =
+                    downloadProgress.currentTable &&
+                    sanitizedFileName.includes(sanitizedCurrentTable) &&
+                    file.size === 0;
+                  const isCompleted = file.size > 0 && !isProcessing;
+
+                  return (
+                    <div
+                      key={idx}
+                      className="text-xs text-[var(--text-main)] flex items-center gap-2"
+                    >
+                      {isProcessing ? (
+                        <span className="inline-block h-3 w-3 border-2 border-[var(--brand)] border-t-transparent rounded-full animate-spin" />
+                      ) : isCompleted ? (
+                        <span className="text-green-600">✓</span>
+                      ) : (
+                        <span className="text-[var(--text-muted)]">○</span>
+                      )}
+                      <span>{file.name}</span>
+                      {file.size > 0 && (
+                        <span className="text-[var(--text-muted)]">
+                          ({(file.size / 1024).toFixed(1)} KB)
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
 

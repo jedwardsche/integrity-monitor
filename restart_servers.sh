@@ -73,7 +73,7 @@ fi
 
 # Start backend in background
 echo "  Starting uvicorn server..."
-nohup uvicorn main:app --reload --host 0.0.0.0 --port 8000 > ../logs/backend.log 2>&1 &
+nohup uvicorn main:app --reload --reload-exclude "*.venv/*" --reload-exclude "*/__pycache__/*" --reload-exclude "*/.git/*" --host 0.0.0.0 --port 8000 > ../logs/backend.log 2>&1 &
 BACKEND_PID=$!
 
 # Wait and check if backend started

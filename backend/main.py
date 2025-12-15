@@ -11,10 +11,12 @@ backend_dir = Path(__file__).parent
 load_dotenv(backend_dir / ".env")
 
 from .config.schema_loader import load_schema_config
-from .middleware.auth import verify_bearer_token, verify_cloud_scheduler_auth, verify_firebase_token, verify_firebase_token
+from .middleware.auth import verify_bearer_token, verify_cloud_scheduler_auth, verify_firebase_token
 from .services.integrity_runner import IntegrityRunner
 from .services.airtable_schema_service import schema_service
 from .services.integrity_metrics_service import get_metrics_service
+from .services.table_id_discovery import discover_table_ids, validate_discovered_ids
+from .services.config_updater import update_config
 from .utils.errors import IntegrityRunError
 
 logger = logging.getLogger(__name__)
@@ -307,6 +309,81 @@ def airtable_schema_summary():
         return schema_service.summary()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/airtable/schema/discover-table-ids", dependencies=[Depends(verify_firebase_token)])
+def discover_and_update_table_ids():
+    """Discover table IDs from schema JSON and update configuration.
+    
+    This endpoint:
+    1. Loads the schema JSON and entity-to-table mapping
+    2. Discovers table IDs by matching table names
+    3. Updates .env file and/or Firestore config with discovered IDs
+    
+    Returns:
+        Dictionary with discovered IDs and update status
+    """
+    try:
+        # Discover table IDs
+        discovered_ids = discover_table_ids()
+        
+        if not discovered_ids:
+            return {
+                "success": False,
+                "message": "No table IDs discovered. Check schema file and mapping config.",
+                "discovered": {},
+                "updates": {},
+            }
+        
+        # Get Firestore client for config updates (if available)
+        firestore_client = None
+        try:
+            from .clients.firestore import FirestoreClient
+            from .config.settings import FirestoreConfig
+            from .config.config_loader import load_runtime_config
+            
+            # Try to get Firestore client from runtime config
+            temp_config = load_runtime_config()
+            firestore_client = FirestoreClient(temp_config.firestore)
+        except Exception as exc:
+            logger.debug(f"Firestore client not available for config updates: {exc}")
+        
+        # Update configuration
+        update_results = update_config(
+            discovered_ids,
+            firestore_client=firestore_client,
+            use_firestore=firestore_client is not None,
+        )
+        
+        # Validate results
+        validation = validate_discovered_ids(discovered_ids)
+        all_valid = all(validation.values())
+        
+        # Count successful updates
+        env_updates = sum(1 for v in update_results.get("env", {}).values() if v)
+        firestore_updates = sum(1 for v in update_results.get("firestore", {}).values() if v)
+        
+        return {
+            "success": True,
+            "message": f"Discovered {len(discovered_ids)} table IDs. Updated {env_updates} in .env, {firestore_updates} in Firestore.",
+            "discovered": discovered_ids,
+            "validation": validation,
+            "updates": update_results,
+            "all_valid": all_valid,
+        }
+        
+    except FileNotFoundError as exc:
+        logger.error(f"Schema or mapping file not found: {exc}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Schema or mapping file not found: {exc}"
+        ) from exc
+    except Exception as exc:
+        logger.error(f"Failed to discover table IDs: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to discover table IDs: {str(exc)}"
+        ) from exc
 
 
 @app.get("/airtable/records/{table_id}", dependencies=[Depends(verify_firebase_token)])
