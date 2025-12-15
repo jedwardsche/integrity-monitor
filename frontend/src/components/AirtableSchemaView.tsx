@@ -655,9 +655,17 @@ export function AirtableSchemaView({
               <button
                 onClick={handleDownloadSchemaFile}
                 disabled={isDownloading}
-                className="text-[var(--cta-blue)] hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                className="text-[var(--cta-blue)] hover:underline disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
               >
                 backend/config/airtable_schema.json
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 -960 960 960"
+                  className="w-3 h-3 flex-shrink-0"
+                  fill="currentColor"
+                >
+                  <path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z" />
+                </svg>
               </button>
               .
             </p>
@@ -676,14 +684,30 @@ export function AirtableSchemaView({
                 <button
                   onClick={handleUpdateTableIds}
                   disabled={isUpdatingTableIds}
-                  className="rounded-full border border-[var(--brand)] bg-white px-4 py-2 text-sm font-medium text-[var(--brand)] hover:bg-[var(--brand)]/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="rounded-full border border-[var(--brand)] bg-white px-4 py-2 text-sm font-medium text-[var(--brand)] hover:bg-[var(--brand)]/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 -960 960 960"
+                    className="w-4 h-4 flex-shrink-0"
+                    fill="currentColor"
+                  >
+                    <path d="M560-160v-80h120q17 0 28.5-11.5T720-280v-80q0-38 22-69t58-44v-14q-36-13-58-44t-22-69v-80q0-17-11.5-28.5T680-720H560v-80h120q50 0 85 35t35 85v80q0 17 11.5 28.5T840-560h40v160h-40q-17 0-28.5 11.5T800-360v80q0 50-35 85t-85 35H560Zm-280 0q-50 0-85-35t-35-85v-80q0-17-11.5-28.5T120-400H80v-160h40q17 0 28.5-11.5T160-600v-80q0-50 35-85t85-35h120v80H280q-17 0-28.5 11.5T240-680v80q0 38-22 69t-58 44v14q36 13 58 44t22 69v80q0 17 11.5 28.5T280-240h120v80H280Z" />
+                  </svg>
                   {isUpdatingTableIds ? "Updating..." : "Update Table IDs"}
                 </button>
                 <button
                   onClick={() => setBaseDownloadMenuOpen(true)}
-                  className="rounded-full border border-[var(--border)] bg-white px-4 py-2 text-sm font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)]/50 transition-colors"
+                  className="rounded-full border border-[var(--border)] bg-white px-4 py-2 text-sm font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)]/50 transition-colors flex items-center gap-2"
                 >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 -960 960 960"
+                    className="w-4 h-4 flex-shrink-0"
+                    fill="currentColor"
+                  >
+                    <path d="M480-120q-151 0-255.5-46.5T120-280v-400q0-66 105.5-113T480-840q149 0 254.5 47T840-680v400q0 67-104.5 113.5T480-120Zm0-479q89 0 179-25.5T760-679q-11-29-100.5-55T480-760q-91 0-178.5 25.5T200-679q14 30 101.5 55T480-599Zm0 199q42 0 81-4t74.5-11.5q35.5-7.5 67-18.5t57.5-25v-120q-26 14-57.5 25t-67 18.5Q600-528 561-524t-81 4q-42 0-82-4t-75.5-11.5Q287-543 256-554t-56-25v120q25 14 56 25t66.5 18.5Q358-408 398-404t82 4Zm0 200q46 0 93.5-7t87.5-18.5q40-11.5 67-26t32-29.5v-98q-26 14-57.5 25t-67 18.5Q600-328 561-324t-81 4q-42 0-82-4t-75.5-11.5Q287-343 256-354t-56-25v99q5 15 31.5 29t66.5 25.5q40 11.5 88 18.5t94 7Z" />
+                  </svg>
                   Download Base
                 </button>
               </>
@@ -857,8 +881,16 @@ export function AirtableSchemaView({
                           )
                         }
                         disabled={isDownloading}
-                        className="relative rounded-full border border-[var(--border)] bg-white px-4 py-1.5 text-sm font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="relative rounded-full border border-[var(--border)] bg-white px-4 py-1.5 text-sm font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                       >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 -960 960 960"
+                          className="w-4 h-4 flex-shrink-0"
+                          fill="currentColor"
+                        >
+                          <path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z" />
+                        </svg>
                         Download Data
                       </button>
                       {dataDownloadMenuOpen === table.id && (
@@ -877,8 +909,16 @@ export function AirtableSchemaView({
                       <button
                         onClick={() => handleDownloadTableSchema(table.id)}
                         disabled={isDownloading}
-                        className="rounded-full border border-[var(--border)] bg-white px-4 py-1.5 text-sm font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="rounded-full border border-[var(--border)] bg-white px-4 py-1.5 text-sm font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                       >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 -960 960 960"
+                          className="w-4 h-4 flex-shrink-0"
+                          fill="currentColor"
+                        >
+                          <path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z" />
+                        </svg>
                         Download Schema
                       </button>
                     </div>

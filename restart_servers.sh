@@ -30,9 +30,20 @@ kill_port() {
     fi
 }
 
+# Function to kill all uvicorn/python backend processes
+kill_backend_processes() {
+    echo -e "${YELLOW}Killing any existing backend processes...${NC}"
+    pkill -f "uvicorn backend.main" 2>/dev/null
+    pkill -f "uvicorn.*main:app" 2>/dev/null
+    pkill -f "python.*uvicorn.*backend.main" 2>/dev/null
+    sleep 1
+    echo -e "${GREEN}✓ Backend processes cleaned up${NC}"
+}
+
 # Stop backend (port 8000)
 echo ""
 echo "Stopping backend server..."
+kill_backend_processes
 kill_port 8000
 
 # Stop frontend (port 5173)
@@ -51,39 +62,84 @@ echo "=========================================="
 # Start backend
 echo ""
 echo "Starting backend server..."
-cd "$SCRIPT_DIR/backend"
+cd "$SCRIPT_DIR"
 
-# Check if .venv exists
-if [ ! -d ".venv" ]; then
+# Check if backend/.venv exists
+if [ ! -d "backend/.venv" ]; then
     echo -e "${RED}✗ Virtual environment not found${NC}"
     echo "  Creating virtual environment..."
+    cd backend
     python3 -m venv .venv
     source .venv/bin/activate
     echo "  Installing dependencies..."
     pip install -r requirements.txt
+    cd ..
 else
-    source .venv/bin/activate
+    source backend/.venv/bin/activate
 fi
 
 # Check if dependencies are installed
 if ! python -c "import firebase_admin" 2>/dev/null; then
     echo -e "${YELLOW}Installing missing dependencies...${NC}"
+    cd backend
     pip install -r requirements.txt
+    cd ..
 fi
 
-# Start backend in background
+# Start backend in background (run from project root to allow relative imports)
 echo "  Starting uvicorn server..."
-nohup uvicorn main:app --reload --reload-exclude "**/.venv/**" --reload-exclude "**/__pycache__/**" --reload-exclude "**/.git/**" --reload-exclude "**/node_modules/**" --host 0.0.0.0 --port 8000 > ../logs/backend.log 2>&1 &
+# Ensure logs directory exists
+mkdir -p logs
+# Start uvicorn server
+# Note: --reload disabled due to reloader causing startup hangs
+# Restart the server manually after code changes using: ./restart_servers.sh
+python -m uvicorn backend.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    >> logs/backend.log 2>&1 &
 BACKEND_PID=$!
+echo "  Started process with PID: $BACKEND_PID"
 
-# Wait and check if backend started
-sleep 3
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ Backend server started on http://localhost:8000${NC}"
-    echo "  PID: $BACKEND_PID"
-else
-    echo -e "${RED}✗ Backend server failed to start${NC}"
+# Wait longer and check multiple times if backend started
+echo "  Waiting for server to start..."
+STARTED=false
+# Wait up to 20 seconds (--reload mode can take longer to fully start)
+for i in {1..20}; do
+    sleep 1
+    # Check if process is still running
+    if ! ps -p $BACKEND_PID > /dev/null 2>&1; then
+        echo -e "${RED}✗ Backend process died unexpectedly${NC}"
+        echo "  Check logs: tail -f logs/backend.log"
+        tail -30 logs/backend.log 2>/dev/null || echo "  (log file empty)"
+        STARTED=false
+        break
+    fi
+    # Check if server is responding
+    # Try multiple times as reloader may restart during startup
+    HEALTH_CHECK_PASSED=false
+    for j in {1..3}; do
+        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+            HEALTH_CHECK_PASSED=true
+            break
+        fi
+        sleep 0.5
+    done
+    
+    if [ "$HEALTH_CHECK_PASSED" = true ]; then
+        echo -e "${GREEN}✓ Backend server started on http://localhost:8000${NC}"
+        echo "  PID: $BACKEND_PID"
+        STARTED=true
+        break
+    fi
+done
+
+if [ "$STARTED" = false ]; then
+    echo -e "${RED}✗ Backend server failed to start after 15 seconds${NC}"
+    echo "  Process status:"
+    ps -p $BACKEND_PID 2>/dev/null || echo "  Process not found"
     echo "  Check logs: tail -f logs/backend.log"
+    echo "  Last 30 lines of log:"
+    tail -30 logs/backend.log 2>/dev/null || echo "  (log file empty or not found)"
 fi
 
 # Start frontend

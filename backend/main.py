@@ -1,18 +1,68 @@
 import logging
 import os
+import json
+import time
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+
+# #region agent log
+debug_log = Path('/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/.cursor/debug.log')
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:1","message":"Module import started","data":{"step":"import_start"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
 
 # Load environment variables from backend/.env
 from dotenv import load_dotenv
 backend_dir = Path(__file__).parent
 load_dotenv(backend_dir / ".env")
 
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:12","message":"After dotenv load","data":{"step":"after_dotenv"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
+
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:13","message":"Before imports","data":{"step":"before_imports"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
+
 from .config.schema_loader import load_schema_config
+
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:16","message":"After schema_loader import","data":{"step":"after_schema_loader"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
+
 from .middleware.auth import verify_bearer_token, verify_cloud_scheduler_auth, verify_firebase_token
+
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:19","message":"After auth import","data":{"step":"after_auth"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
+
 from .services.integrity_runner import IntegrityRunner
+
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:22","message":"After IntegrityRunner import","data":{"step":"after_integrity_runner_import"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
+
 from .services.airtable_schema_service import schema_service
 from .services.integrity_metrics_service import get_metrics_service
 from .services.table_id_discovery import discover_table_ids, validate_discovered_ids
@@ -48,8 +98,34 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestIDMiddleware)
 
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:51","message":"Starting schema config load","data":{"step":"before_load_schema_config"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
+
 schema_config = load_schema_config()
+
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:52","message":"Schema config loaded, starting IntegrityRunner init","data":{"step":"before_integrity_runner"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
+
 runner = IntegrityRunner()
+
+# Global dictionary to track running scans: {run_id: threading.Event}
+running_scans: dict[str, threading.Event] = {}
+running_scans_lock = threading.Lock()
+
+# #region agent log
+try:
+    with open(debug_log, 'a') as f:
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:53","message":"IntegrityRunner initialized, module load complete","data":{"step":"after_integrity_runner"},"timestamp":int(time.time()*1000)})+'\n')
+except: pass
+# #endregion agent log
 
 
 @app.get("/health")
@@ -231,9 +307,31 @@ def schema():
     return schema_config.model_dump()
 
 
+def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event: threading.Event):
+    """Run integrity scan in background thread."""
+    try:
+        # Create a new runner instance for this thread
+        thread_runner = IntegrityRunner()
+        result = thread_runner.run(mode=mode, trigger=trigger, cancel_event=cancel_event)
+        logger.info(
+            "Integrity run completed",
+            extra={"run_id": run_id, "status": result.get("status", "success")},
+        )
+    except Exception as exc:
+        logger.error(
+            "Integrity run failed",
+            extra={"run_id": run_id, "error": str(exc)},
+            exc_info=True,
+        )
+    finally:
+        # Clean up running scan tracking
+        with running_scans_lock:
+            running_scans.pop(run_id, None)
+
+
 @app.post("/integrity/run", dependencies=[Depends(verify_cloud_scheduler_auth)])
 def run_integrity(request: Request, mode: str = "incremental", trigger: str = "manual"):
-    """Trigger the integrity runner.
+    """Trigger the integrity runner (runs in background).
 
     Args:
         request: FastAPI request object (injected)
@@ -241,55 +339,145 @@ def run_integrity(request: Request, mode: str = "incremental", trigger: str = "m
         trigger: Trigger source ("nightly", "weekly", or "manual")
 
     Returns:
-        - 200: Success (check response body for status: "success", "warning", or "error")
-        - 500: Complete system failure (unable to execute run)
+        - 200: Success with run_id (scan runs in background)
+        - 500: Complete system failure (unable to start run)
     """
     # Get request ID from middleware
     request_id = getattr(request.state, "request_id", "unknown")
     logger.info("Integrity run requested", extra={"mode": mode, "trigger": trigger, "request_id": request_id})
 
     try:
-        result = runner.run(mode=mode, trigger=trigger)
-        run_status = result.get("status", "success")
-
-        # Return 200 OK for all successful runs (status details in response body)
-        # Only return 500 if the run itself failed to execute
-        http_status = status.HTTP_200_OK
+        # Generate run_id first
+        import uuid
+        run_id = str(uuid.uuid4())
         
-        logger.info(
-            "Integrity run completed",
-            extra={
-                "run_id": result.get("run_id"),
-                "status": run_status,
-                "request_id": request_id,
-            },
-        )
+        # Create cancellation event for this run
+        cancel_event = threading.Event()
         
-        return result
+        # Store in running scans
+        with running_scans_lock:
+            running_scans[run_id] = cancel_event
         
-    except IntegrityRunError as exc:
-        logger.error(
-            "Integrity run failed",
-            extra={"run_id": exc.run_id, "error": str(exc), "request_id": request_id},
-            exc_info=True,
+        # Start background thread
+        thread = threading.Thread(
+            target=_run_integrity_background,
+            args=(run_id, mode, trigger, cancel_event),
+            daemon=True,
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": str(exc),
-                "run_id": exc.run_id,
-                "transient": exc.transient,
-            },
-        )
+        thread.start()
+        
+        logger.info("Integrity run started in background", extra={"run_id": run_id, "request_id": request_id})
+        
+        # Return immediately with run_id
+        return {
+            "run_id": run_id,
+            "status": "running",
+            "message": "Scan started in background",
+        }
+        
     except Exception as exc:
         logger.error(
-            "Unexpected error in integrity run",
+            "Failed to start integrity run",
             extra={"error": str(exc), "request_id": request_id},
             exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "Unexpected error occurred", "message": str(exc)},
+            detail={"error": "Failed to start integrity run", "message": str(exc)},
+        )
+
+
+@app.post("/integrity/run/{run_id}/cancel", dependencies=[Depends(verify_cloud_scheduler_auth)])
+def cancel_integrity_run(run_id: str, request: Request):
+    """Cancel a running integrity scan.
+    
+    Args:
+        run_id: Run identifier to cancel
+        request: FastAPI request object (injected)
+    
+    Returns:
+        - 200: Success (run cancelled or not found)
+        - 404: Run not found or already completed
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.info("Integrity run cancellation requested", extra={"run_id": run_id, "request_id": request_id})
+    
+    with running_scans_lock:
+        cancel_event = running_scans.get(run_id)
+        if cancel_event:
+            # Set cancellation event
+            cancel_event.set()
+            logger.info("Integrity run cancellation signal sent", extra={"run_id": run_id, "request_id": request_id})
+            
+            # Update run status in Firestore
+            try:
+                from .clients.firestore import FirestoreClient
+                from .config.settings import FirestoreConfig
+                from .config.config_loader import load_runtime_config
+                
+                config = load_runtime_config()
+                firestore_client = FirestoreClient(config.firestore)
+                firestore_client.record_run(
+                    run_id,
+                    {
+                        "status": "cancelled",
+                        "ended_at": datetime.now(timezone.utc),
+                    },
+                )
+                
+                # Log cancellation
+                from .writers.firestore_writer import FirestoreWriter
+                writer = FirestoreWriter(firestore_client)
+                writer.write_log(run_id, "info", "Scan cancelled by user")
+            except Exception as exc:
+                logger.warning(
+                    "Failed to update run status after cancellation",
+                    extra={"run_id": run_id, "error": str(exc)},
+                )
+            
+            return {"status": "success", "message": "Run cancellation requested", "run_id": run_id}
+        else:
+            logger.warning("Integrity run not found or already completed", extra={"run_id": run_id, "request_id": request_id})
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "Run not found or already completed", "run_id": run_id},
+            )
+
+
+@app.delete("/integrity/run/{run_id}", dependencies=[Depends(verify_cloud_scheduler_auth)])
+def delete_integrity_run(run_id: str, request: Request):
+    """Delete an integrity run and all its associated logs.
+    
+    Args:
+        run_id: Run identifier to delete
+        request: FastAPI request object (injected)
+    
+    Returns:
+        - 200: Success (run deleted)
+        - 404: Run not found
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.info("Integrity run deletion requested", extra={"run_id": run_id, "request_id": request_id})
+    
+    try:
+        from .clients.firestore import FirestoreClient
+        from .config.config_loader import load_runtime_config
+        
+        config = load_runtime_config()
+        firestore_client = FirestoreClient(config.firestore)
+        firestore_client.delete_run(run_id)
+        
+        logger.info("Integrity run deleted", extra={"run_id": run_id, "request_id": request_id})
+        return {"status": "success", "message": "Run deleted successfully", "run_id": run_id}
+    except Exception as exc:
+        logger.error(
+            "Failed to delete integrity run",
+            extra={"run_id": run_id, "error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to delete run", "message": str(exc), "run_id": run_id},
         )
 
 
@@ -324,16 +512,20 @@ def discover_and_update_table_ids():
         Dictionary with discovered IDs and update status
     """
     try:
-        # Discover table IDs
-        discovered_ids = discover_table_ids()
+        # Discover table IDs and base ID
+        discovery_result = discover_table_ids()
         
-        if not discovered_ids:
+        if not discovery_result or not discovery_result.get("table_ids"):
             return {
                 "success": False,
                 "message": "No table IDs discovered. Check schema file and mapping config.",
                 "discovered": {},
                 "updates": {},
             }
+        
+        table_ids = discovery_result.get("table_ids", {})
+        base_id = discovery_result.get("base_id")
+        entities = list(table_ids.keys())
         
         # Get Firestore client for config updates (if available)
         firestore_client = None
@@ -350,23 +542,32 @@ def discover_and_update_table_ids():
         
         # Update configuration
         update_results = update_config(
-            discovered_ids,
+            table_ids,
+            base_id=base_id,
+            entities=entities,
             firestore_client=firestore_client,
             use_firestore=firestore_client is not None,
         )
         
         # Validate results
-        validation = validate_discovered_ids(discovered_ids)
+        validation = validate_discovered_ids(table_ids)
         all_valid = all(validation.values())
         
         # Count successful updates
         env_updates = sum(1 for v in update_results.get("env", {}).values() if v)
         firestore_updates = sum(1 for v in update_results.get("firestore", {}).values() if v)
         
+        message = f"Discovered base ID and {len(table_ids)} table IDs. Updated {env_updates} in .env, {firestore_updates} in Firestore."
+        if base_id:
+            message = f"Discovered base ID ({base_id}) and {len(table_ids)} table IDs. Updated {env_updates} in .env, {firestore_updates} in Firestore."
+        
         return {
             "success": True,
-            "message": f"Discovered {len(discovered_ids)} table IDs. Updated {env_updates} in .env, {firestore_updates} in Firestore.",
-            "discovered": discovered_ids,
+            "message": message,
+            "discovered": {
+                "base_id": base_id,
+                "table_ids": table_ids,
+            },
             "validation": validation,
             "updates": update_results,
             "all_valid": all_valid,

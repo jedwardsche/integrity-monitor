@@ -1,12 +1,30 @@
 import { useParams, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
 import { useRunStatus } from "../hooks/useRunStatus";
+import { useRunLogs } from "../hooks/useRunLogs";
 import { RunDetailModal } from "../components/RunDetailModal";
 import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
+import { useAuth } from "../hooks/useAuth";
 
 export function RunStatusPage() {
   const { runId } = useParams<{ runId: string }>();
   const navigate = useNavigate();
   const { runStatus, loading, error } = useRunStatus(runId || null);
+  const { logs, loading: logsLoading } = useRunLogs(runId || null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const { getToken } = useAuth();
+  const [isCancelling, setIsCancelling] = useState(false);
+
+  // Auto-scroll to bottom when new logs arrive (only when scan is running)
+  // Calculate isRunning safely - will be false if runStatus is not available yet
+  const isRunning = runStatus
+    ? runStatus.status === "running" || !runStatus.ended_at
+    : false;
+  useEffect(() => {
+    if (logsEndRef.current && isRunning) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs, isRunning]);
 
   if (loading) {
     return (
@@ -54,7 +72,6 @@ export function RunStatusPage() {
     );
   }
 
-  const isRunning = runStatus.status === "running" || !runStatus.ended_at;
   const startTime =
     runStatus.started_at?.toDate?.() ||
     new Date(runStatus.started_at || Date.now());
@@ -109,12 +126,63 @@ export function RunStatusPage() {
             Run ID: {runStatus.id}
           </p>
         </div>
-        <button
-          onClick={() => navigate("/")}
-          className="rounded-lg border border-[var(--border)] px-4 py-2 text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors"
-        >
-          Back to Dashboard
-        </button>
+        <div className="flex gap-3">
+          <button
+            onClick={() => navigate("/")}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center justify-center"
+            title="Back to Dashboard"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
+            </svg>
+          </button>
+          {isRunning && (
+            <button
+              onClick={async () => {
+                if (!runId || isCancelling) return;
+                setIsCancelling(true);
+                try {
+                  const token = await getToken();
+                  const API_BASE =
+                    import.meta.env.VITE_API_BASE || "http://localhost:8000";
+                  const response = await fetch(
+                    `${API_BASE}/integrity/run/${runId}/cancel`,
+                    {
+                      method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                      },
+                    }
+                  );
+                  if (!response.ok) {
+                    throw new Error("Failed to cancel run");
+                  }
+                  // Status will update via real-time subscription
+                } catch (error) {
+                  console.error("Failed to cancel run:", error);
+                  alert("Failed to cancel run. Please try again.");
+                } finally {
+                  setIsCancelling(false);
+                }
+              }}
+              disabled={isCancelling}
+              className="rounded-lg border border-red-500 px-4 py-2 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isCancelling ? "Cancelling..." : "Cancel Scan"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Status Card */}
@@ -302,13 +370,68 @@ export function RunStatusPage() {
 
       {/* Auto-refresh indicator for running scans */}
       {isRunning && (
-        <div className="text-center text-sm text-[var(--text-muted)]">
+        <div className="text-center text-sm text-[var(--text-muted)] mb-6">
           <span className="inline-flex items-center gap-2">
             <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
             Live updates enabled
           </span>
         </div>
       )}
+
+      {/* Real-time Logs */}
+      <div className="rounded-2xl border border-[var(--border)] bg-white p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2
+            className="text-lg font-semibold text-[var(--text-main)]"
+            style={{ fontFamily: "Outfit" }}
+          >
+            Real-time Logs
+          </h2>
+          {logsLoading && (
+            <div className="text-sm text-[var(--text-muted)]">
+              Loading logs...
+            </div>
+          )}
+        </div>
+
+        <div className="bg-[var(--bg-dark)] rounded-lg border border-[var(--border)] p-4 font-mono text-sm max-h-[600px] overflow-y-auto">
+          {logs.length === 0 && !logsLoading && (
+            <div className="text-[var(--text-muted)] text-center py-8">
+              No logs available yet
+            </div>
+          )}
+          {logs.map((log) => {
+            const timestamp =
+              log.timestamp?.toDate?.() ||
+              new Date(log.timestamp || Date.now());
+            const timeStr = timestamp.toLocaleTimeString();
+            const levelColor =
+              {
+                info: "text-blue-600",
+                warning: "text-yellow-600",
+                error: "text-red-600",
+                debug: "text-gray-500",
+              }[log.level] || "text-[var(--text-muted)]";
+
+            return (
+              <div key={log.id} className="mb-2 flex gap-3">
+                <span className="text-[var(--text-muted)] text-xs whitespace-nowrap">
+                  {timeStr}
+                </span>
+                <span
+                  className={`font-semibold ${levelColor} uppercase text-xs`}
+                >
+                  {log.level}
+                </span>
+                <span className="text-[var(--text-main)] flex-1">
+                  {log.message}
+                </span>
+              </div>
+            );
+          })}
+          <div ref={logsEndRef} />
+        </div>
+      </div>
     </div>
   );
 }

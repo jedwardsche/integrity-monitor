@@ -2,11 +2,55 @@ import { useNavigate } from "react-router-dom";
 import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
 import { useState } from "react";
 import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
+import { useAuth } from "../hooks/useAuth";
 
 export function RunsPage() {
   const navigate = useNavigate();
   const { data: runs, loading, error } = useFirestoreRuns(100);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const { getToken } = useAuth();
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+
+  const handleDelete = async (runId: string) => {
+    if (
+      !confirm(
+        "Are you sure you want to delete this run? This action cannot be undone."
+      )
+    ) {
+      return;
+    }
+
+    setDeletingRunId(runId);
+    try {
+      const token = await getToken();
+      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+      const response = await fetch(`${API_BASE}/integrity/run/${runId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: "Failed to delete run" }));
+        throw new Error(errorData.error || "Failed to delete run");
+      }
+
+      // The Firestore subscription will automatically update the list
+    } catch (error) {
+      console.error("Failed to delete run:", error);
+      alert(
+        `Failed to delete run: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    } finally {
+      setDeletingRunId(null);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -155,9 +199,54 @@ export function RunsPage() {
                             navigate(`/run/${run.run_id}`);
                           }
                         }}
-                        className="text-sm text-[var(--brand)] hover:underline"
+                        className="text-sm text-[var(--brand)] hover:underline flex items-center gap-1"
                       >
                         View Details
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M9 5l7 7-7 7"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (run.run_id || run.id) {
+                            handleDelete(run.run_id || run.id);
+                          }
+                        }}
+                        disabled={deletingRunId === (run.run_id || run.id)}
+                        className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        title="Delete run"
+                      >
+                        {deletingRunId === (run.run_id || run.id) ? (
+                          "Deleting..."
+                        ) : (
+                          <>
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                            Delete
+                          </>
+                        )}
                       </button>
                       <svg
                         className={`w-5 h-5 text-[var(--text-muted)] transition-transform ${
