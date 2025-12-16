@@ -4,9 +4,7 @@ import { deriveSummaryFromSchema } from "../utils/airtable";
 import type { AirtableSchema, AirtableSummary } from "../utils/airtable";
 import { useAuth } from "../hooks/useAuth";
 
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ||
-  window.location.origin;
+import { API_BASE } from "../config/api";
 
 async function fetchJson<T>(path: string, token?: string): Promise<T> {
   const url = `${API_BASE}${path}`;
