@@ -11,10 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # #region agent log
-debug_log = Path('/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/.cursor/debug.log')
+# Debug log path - only used in local development
+debug_log = Path(__file__).parent.parent / ".cursor" / "debug.log"
 try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:1","message":"Module import started","data":{"step":"import_start"},"timestamp":int(time.time()*1000)})+'\n')
+    if debug_log.parent.exists():
+        with open(debug_log, 'a') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:1","message":"Module import started","data":{"step":"import_start"},"timestamp":int(time.time()*1000)})+'\n')
 except: pass
 # #endregion agent log
 

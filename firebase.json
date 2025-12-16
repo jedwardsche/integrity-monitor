@@ -17,11 +17,20 @@
     ]
   },
   "hosting": {
-    "public": "public",
+    "public": "frontend/dist",
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
+    ],
+    "predeploy": [
+      "./build-frontend.sh"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
     ]
   },
   "storage": {
