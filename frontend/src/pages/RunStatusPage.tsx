@@ -17,8 +17,15 @@ export function RunStatusPage() {
 
   // Auto-scroll to bottom when new logs arrive (only when scan is running)
   // Calculate isRunning safely - will be false if runStatus is not available yet
+  const statusLower = runStatus?.status?.toLowerCase() || "";
   const isRunning = runStatus
-    ? runStatus.status === "running" || !runStatus.ended_at
+    ? (runStatus.status === "running" || !runStatus.ended_at) &&
+      statusLower !== "cancelled" &&
+      statusLower !== "canceled" &&
+      statusLower !== "success" &&
+      statusLower !== "error" &&
+      statusLower !== "warning" &&
+      statusLower !== "healthy"
     : false;
   useEffect(() => {
     if (logsEndRef.current && isRunning) {
@@ -87,26 +94,34 @@ export function RunStatusPage() {
   };
 
   const getStatusColor = (status: string) => {
-    switch (status) {
+    switch (status?.toLowerCase()) {
       case "success":
+      case "healthy":
         return "bg-green-100 text-green-800";
       case "error":
         return "bg-red-100 text-red-800";
       case "warning":
         return "bg-yellow-100 text-yellow-800";
+      case "cancelled":
+      case "canceled":
+        return "bg-gray-100 text-gray-800";
       default:
         return "bg-blue-100 text-blue-800";
     }
   };
 
   const getStatusLabel = (status: string) => {
-    switch (status) {
+    switch (status?.toLowerCase()) {
       case "success":
+      case "healthy":
         return "Completed";
       case "error":
         return "Failed";
       case "warning":
         return "Completed with Warnings";
+      case "cancelled":
+      case "canceled":
+        return "Cancelled";
       default:
         return "Running";
     }
@@ -128,9 +143,9 @@ export function RunStatusPage() {
         </div>
         <div className="flex gap-3">
           <button
-            onClick={() => navigate("/")}
+            onClick={() => navigate("/runs")}
             className="rounded-lg border border-[var(--border)] px-4 py-2 text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center justify-center"
-            title="Back to Dashboard"
+            title="Back to Runs"
           >
             <svg
               className="w-5 h-5"
@@ -166,12 +181,29 @@ export function RunStatusPage() {
                     }
                   );
                   if (!response.ok) {
-                    throw new Error("Failed to cancel run");
+                    const errorData = await response
+                      .json()
+                      .catch(() => ({ error: "Failed to cancel run" }));
+                    throw new Error(
+                      errorData.detail?.error ||
+                        errorData.error ||
+                        "Failed to cancel run"
+                    );
                   }
                   // Status will update via real-time subscription
                 } catch (error) {
                   console.error("Failed to cancel run:", error);
-                  alert("Failed to cancel run. Please try again.");
+                  let errorMessage = "Failed to cancel run. Please try again.";
+                  if (
+                    error instanceof TypeError &&
+                    error.message.includes("fetch")
+                  ) {
+                    errorMessage =
+                      "Backend server is not available. Please ensure the backend is running.";
+                  } else if (error instanceof Error) {
+                    errorMessage = error.message;
+                  }
+                  alert(errorMessage);
                 } finally {
                   setIsCancelling(false);
                 }
@@ -368,13 +400,127 @@ export function RunStatusPage() {
         )}
       </div>
 
-      {/* Auto-refresh indicator for running scans */}
+      {/* Current Step Progress Indicator */}
       {isRunning && (
-        <div className="text-center text-sm text-[var(--text-muted)] mb-6">
-          <span className="inline-flex items-center gap-2">
-            <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
-            Live updates enabled
-          </span>
+        <div className="rounded-2xl border border-[var(--border)] bg-white p-6 mb-6">
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-[var(--text-main)]">
+                Current Step
+              </span>
+              <span className="inline-flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
+                Live updates enabled
+              </span>
+            </div>
+            <div className="text-sm text-[var(--text-muted)]">
+              {logs.length > 0
+                ? logs[logs.length - 1]?.message || "Initializing..."
+                : "Waiting for logs..."}
+            </div>
+          </div>
+          {(() => {
+            const latestLog =
+              logs.length > 0
+                ? logs[logs.length - 1]?.message?.toLowerCase() || ""
+                : "";
+            let progress = 0;
+            let stageLabel = "Initializing";
+
+            if (
+              latestLog.includes("discovering") ||
+              latestLog.includes("discovered")
+            ) {
+              stageLabel = "Discovering table IDs";
+              progress = 10;
+            } else if (
+              latestLog.includes("fetching") ||
+              latestLog.includes("fetched")
+            ) {
+              if (latestLog.includes("students")) {
+                stageLabel = "Fetching students";
+                progress = 25;
+              } else if (latestLog.includes("parents")) {
+                stageLabel = "Fetching parents";
+                progress = 30;
+              } else if (latestLog.includes("classes")) {
+                stageLabel = "Fetching classes";
+                progress = 35;
+              } else {
+                stageLabel = "Fetching records";
+                progress = 30;
+              }
+            } else if (
+              latestLog.includes("running") ||
+              latestLog.includes("check")
+            ) {
+              if (latestLog.includes("duplicates")) {
+                stageLabel = "Checking for duplicates";
+                progress = 45;
+              } else if (latestLog.includes("links")) {
+                stageLabel = "Checking links";
+                progress = 60;
+              } else if (latestLog.includes("required")) {
+                stageLabel = "Checking required fields";
+                progress = 75;
+              } else if (latestLog.includes("attendance")) {
+                stageLabel = "Checking attendance";
+                progress = 85;
+              } else {
+                stageLabel = "Running integrity checks";
+                progress = 50;
+              }
+            } else if (
+              latestLog.includes("writing") ||
+              latestLog.includes("wrote")
+            ) {
+              if (latestLog.includes("firestore")) {
+                stageLabel = "Writing to Firestore";
+                progress = 90;
+              } else if (latestLog.includes("airtable")) {
+                stageLabel = "Writing to Airtable";
+                progress = 95;
+              } else {
+                stageLabel = "Writing results";
+                progress = 92;
+              }
+            } else if (
+              latestLog.includes("completed") ||
+              latestLog.includes("complete")
+            ) {
+              stageLabel = "Completed";
+              progress = 100;
+            } else if (latestLog.includes("started")) {
+              stageLabel = "Starting scan";
+              progress = 5;
+            }
+
+            return (
+              <div className="space-y-2">
+                <div className="w-full bg-[var(--bg-mid)] rounded-full h-2">
+                  <div
+                    className="bg-[var(--brand)] h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <div className="text-xs text-[var(--text-muted)] text-center">
+                  {stageLabel}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Run completion info */}
+      {!isRunning && runStatus.ended_at && (
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-mid)]/30 p-4 mb-6">
+          <p className="text-sm text-[var(--text-muted)]">
+            <strong>When runs end:</strong> A run completes when all stages
+            finish (fetching records, running checks, writing results). The run
+            ends automatically when the scan finishes, or if an error occurs.
+            Long-running scans are normal for large datasets.
+          </p>
         </div>
       )}
 

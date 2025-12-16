@@ -104,6 +104,13 @@ export default function App({ children }: AppProps) {
         trigger: "manual",
       });
 
+      // Add entities if specified
+      if (config.entities && config.entities.length > 0) {
+        config.entities.forEach((entity) => {
+          params.append("entities", entity);
+        });
+      }
+
       // #region agent log
       fetch(
         "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
@@ -201,8 +208,11 @@ export default function App({ children }: AppProps) {
 
   // Handle clicking on Running button
   const handleRunningClick = () => {
-    if (currentRunId) {
-      navigate(`/run/${currentRunId}`);
+    // Use lastRunInfo.runId if available (same as the working "Last run" button)
+    // Otherwise fall back to currentRunId
+    const runId = lastRunInfo?.runId || currentRunId;
+    if (runId) {
+      navigate(`/run/${runId}`);
     }
   };
 
@@ -249,18 +259,40 @@ export default function App({ children }: AppProps) {
 
     // Map status to display text and color
     const statusText = lastRun.status || "Unknown";
+    const statusLower = statusText.toLowerCase();
+
+    // Format status text for display
+    let displayStatus = statusText;
+    if (statusLower === "cancelled" || statusLower === "canceled") {
+      displayStatus = "Cancelled";
+    } else if (statusLower === "healthy") {
+      displayStatus = "Healthy";
+    } else if (statusLower === "success") {
+      displayStatus = "Success";
+    } else if (statusLower === "error") {
+      displayStatus = "Error";
+    } else if (statusLower === "warning") {
+      displayStatus = "Warning";
+    } else if (statusLower === "running") {
+      displayStatus = "Running";
+    }
+
     const statusColor =
-      statusText === "Error"
+      statusLower === "error"
         ? "bg-red-500"
-        : statusText === "Warning"
+        : statusLower === "warning"
         ? "bg-yellow-500"
-        : statusText === "Running"
+        : statusLower === "running"
         ? "bg-blue-500"
+        : statusLower === "cancelled" || statusLower === "canceled"
+        ? "bg-gray-500"
+        : statusLower === "success" || statusLower === "healthy"
+        ? "bg-[var(--brand)]"
         : "bg-[var(--brand)]";
 
     return {
       time: timeDisplay,
-      status: statusText,
+      status: displayStatus,
       statusColor,
       runId: lastRun.run_id || lastRun.id,
     };
