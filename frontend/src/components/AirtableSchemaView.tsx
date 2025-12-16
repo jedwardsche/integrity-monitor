@@ -21,9 +21,7 @@ export type DownloadProgress = {
   files: Array<{ name: string; size: number }>; // Files prepared
 };
 
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ||
-  window.location.origin;
+import { API_BASE } from "../config/api";
 
 type AirtableSchemaViewProps = {
   schema: AirtableSchema | null;

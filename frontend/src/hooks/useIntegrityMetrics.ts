@@ -93,8 +93,8 @@ export function useIntegrityMetrics() {
         summary: {
           total: counts.total || 0,
           by_type: counts.by_type || {},
-          by_severity: counts.by_severity || severityCounts,
-          by_type_severity: counts.by_type_severity || {},
+          by_severity: (counts.by_severity || severityCounts) as Record<string, number>,
+          by_type_severity: (counts.by_type_severity || {}) as Record<string, number>,
         },
         last_run: latestRun,
         last_run_time: latestRun.started_at?.toDate?.()?.toISOString() || new Date().toISOString(),
