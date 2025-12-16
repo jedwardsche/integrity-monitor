@@ -3,6 +3,7 @@ import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
 import { useState } from "react";
 import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
 import { useAuth } from "../hooks/useAuth";
+import { API_BASE } from "../config/api";
 
 export function RunsPage() {
   const navigate = useNavigate();
@@ -23,7 +24,6 @@ export function RunsPage() {
     setDeletingRunId(runId);
     try {
       const token = await getToken();
-      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
       const response = await fetch(`${API_BASE}/integrity/run/${runId}`, {
         method: "DELETE",
         headers: {

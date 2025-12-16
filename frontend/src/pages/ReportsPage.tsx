@@ -6,9 +6,7 @@ import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
 import { useAuth } from "../hooks/useAuth";
 import { generateRunReport } from "../services/pdfReportService";
 
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ||
-  window.location.origin;
+import { API_BASE } from "../config/api";
 
 export function ReportsPage() {
   const navigate = useNavigate();
