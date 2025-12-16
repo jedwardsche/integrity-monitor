@@ -591,6 +591,10 @@ class IntegrityRunner:
                             # Don't fail the run if feedback analysis fails
                     
                     log_write(logger, run_id, "firestore", 1, metrics.get("duration_write_firestore", 0))
+                    
+                    # Determine final status after all operations complete
+                    if status == "running" and not failed_checks and not error_message:
+                        status = "success"
             except Exception as exc:
                 logger.error("Firestore write failed", extra={"run_id": run_id}, exc_info=True)
                 # This is critical - log but don't fail the run
@@ -652,6 +656,11 @@ class IntegrityRunner:
             # Clear run_id reference
             if hasattr(self, '_current_run_id'):
                 delattr(self, '_current_run_id')
+
+            # Ensure status is not "running" before writing final status
+            # This acts as a safety net in case status wasn't set earlier
+            if status == "running" and not failed_checks and not error_message:
+                status = "success"
 
             # Ensure final status is written
             try:
