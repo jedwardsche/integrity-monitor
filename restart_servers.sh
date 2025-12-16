@@ -90,10 +90,17 @@ fi
 echo "  Starting uvicorn server..."
 # Ensure logs directory exists
 mkdir -p logs
-# Start uvicorn server
-# Note: --reload disabled due to reloader causing startup hangs
-# Restart the server manually after code changes using: ./restart_servers.sh
+# Start uvicorn server with reload enabled, but exclude .env and logs to prevent loops
 python -m uvicorn backend.main:app \
+    --reload \
+    --reload-exclude "**/.venv/**" \
+    --reload-exclude "**/__pycache__/**" \
+    --reload-exclude "**/.git/**" \
+    --reload-exclude "**/node_modules/**" \
+    --reload-exclude "**/.env" \
+    --reload-exclude "**/*.log" \
+    --reload-exclude "**/.dev-pids" \
+    --reload-exclude "**/.dev-lock" \
     --host 0.0.0.0 \
     --port 8000 \
     >> logs/backend.log 2>&1 &

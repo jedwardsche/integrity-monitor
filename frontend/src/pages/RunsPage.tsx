@@ -42,11 +42,13 @@ export function RunsPage() {
       // The Firestore subscription will automatically update the list
     } catch (error) {
       console.error("Failed to delete run:", error);
-      alert(
-        `Failed to delete run: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
+      let errorMessage = "Unknown error";
+      if (error instanceof TypeError && error.message.includes("fetch")) {
+        errorMessage = "Backend server is not available. Please ensure the backend is running.";
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      alert(`Failed to delete run: ${errorMessage}`);
     } finally {
       setDeletingRunId(null);
     }
@@ -61,6 +63,9 @@ export function RunsPage() {
         return "bg-red-100 text-red-800 border-red-200";
       case "warning":
         return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case "cancelled":
+      case "canceled":
+        return "bg-gray-100 text-gray-800 border-gray-200";
       default:
         return "bg-blue-100 text-blue-800 border-blue-200";
     }
@@ -145,7 +150,15 @@ export function RunsPage() {
               run.started_at?.toDate?.() ||
               new Date(run.started_at || Date.now());
             const endTime = run.ended_at?.toDate?.() || null;
-            const isRunning = !endTime || run.status === "running";
+            const statusLower = (run.status || "").toLowerCase();
+            const isRunning =
+              (!endTime || run.status === "running") &&
+              statusLower !== "cancelled" &&
+              statusLower !== "canceled" &&
+              statusLower !== "success" &&
+              statusLower !== "error" &&
+              statusLower !== "warning" &&
+              statusLower !== "healthy";
 
             return (
               <div
@@ -165,7 +178,10 @@ export function RunsPage() {
                               run.status
                             )}`}
                           >
-                            {run.status}
+                            {statusLower === "cancelled" ||
+                            statusLower === "canceled"
+                              ? "Cancelled"
+                              : run.status}
                           </span>
                           {isRunning && (
                             <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
@@ -199,7 +215,7 @@ export function RunsPage() {
                             navigate(`/run/${run.run_id}`);
                           }
                         }}
-                        className="text-sm text-[var(--brand)] hover:underline flex items-center gap-1"
+                        className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-sm font-medium text-[var(--brand)] hover:bg-[var(--brand)]/5 transition-colors flex items-center gap-2"
                       >
                         View Details
                         <svg
@@ -356,13 +372,20 @@ export function RunsPage() {
                               Run completed with warnings
                             </div>
                           )}
-                          {run.status === "success" ||
-                          run.status === "Healthy" ? (
+                          {(run.status === "success" ||
+                            run.status === "Healthy") && (
                             <div className="text-green-600">
                               <span className="text-green-600">[SUCCESS]</span>{" "}
                               Run completed successfully
                             </div>
-                          ) : null}
+                          )}
+                          {(statusLower === "cancelled" ||
+                            statusLower === "canceled") && (
+                            <div className="text-gray-600">
+                              <span className="text-gray-600">[CANCELLED]</span>{" "}
+                              Run was cancelled
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

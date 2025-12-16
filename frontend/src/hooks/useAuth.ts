@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import type { User } from "firebase/auth";
 import {
   signInWithEmailAndPassword,
@@ -145,10 +145,10 @@ export function useAuth() {
     }
   };
 
-  const getToken = async (): Promise<string | null> => {
+  const getToken = useCallback(async (): Promise<string | null> => {
     if (!state.user) return null;
     return await state.user.getIdToken();
-  };
+  }, [state.user]);
 
   return {
     ...state,

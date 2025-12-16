@@ -5,7 +5,8 @@ import time
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request, status, Depends
+from typing import List, Optional
+from fastapi import FastAPI, HTTPException, Request, status, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -79,7 +80,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins if allowed_origins != ["*"] else ["*"],
     allow_credentials=True if allowed_origins != ["*"] else False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -307,12 +308,12 @@ def schema():
     return schema_config.model_dump()
 
 
-def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event: threading.Event):
+def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event: threading.Event, entities: list[str] = None):
     """Run integrity scan in background thread."""
     try:
         # Create a new runner instance for this thread
         thread_runner = IntegrityRunner()
-        result = thread_runner.run(mode=mode, trigger=trigger, cancel_event=cancel_event)
+        result = thread_runner.run(mode=mode, trigger=trigger, cancel_event=cancel_event, entities=entities)
         logger.info(
             "Integrity run completed",
             extra={"run_id": run_id, "status": result.get("status", "success")},
@@ -330,13 +331,14 @@ def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event
 
 
 @app.post("/integrity/run", dependencies=[Depends(verify_cloud_scheduler_auth)])
-def run_integrity(request: Request, mode: str = "incremental", trigger: str = "manual"):
+def run_integrity(request: Request, mode: str = "incremental", trigger: str = "manual", entities: Optional[List[str]] = Query(default=None)):
     """Trigger the integrity runner (runs in background).
 
     Args:
         request: FastAPI request object (injected)
         mode: Run mode ("incremental" or "full")
         trigger: Trigger source ("nightly", "weekly", or "manual")
+        entities: Optional list of entity names to scan (if not provided, scans all entities)
 
     Returns:
         - 200: Success with run_id (scan runs in background)
@@ -344,7 +346,7 @@ def run_integrity(request: Request, mode: str = "incremental", trigger: str = "m
     """
     # Get request ID from middleware
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.info("Integrity run requested", extra={"mode": mode, "trigger": trigger, "request_id": request_id})
+    logger.info("Integrity run requested", extra={"mode": mode, "trigger": trigger, "entities": entities, "request_id": request_id})
 
     try:
         # Generate run_id first
@@ -361,7 +363,7 @@ def run_integrity(request: Request, mode: str = "incremental", trigger: str = "m
         # Start background thread
         thread = threading.Thread(
             target=_run_integrity_background,
-            args=(run_id, mode, trigger, cancel_event),
+            args=(run_id, mode, trigger, cancel_event, entities),
             daemon=True,
         )
         thread.start()
@@ -402,46 +404,149 @@ def cancel_integrity_run(run_id: str, request: Request):
     request_id = getattr(request.state, "request_id", "unknown")
     logger.info("Integrity run cancellation requested", extra={"run_id": run_id, "request_id": request_id})
     
+    # Try to cancel via in-memory event first (if run is in current process)
     with running_scans_lock:
         cancel_event = running_scans.get(run_id)
         if cancel_event:
             # Set cancellation event
             cancel_event.set()
             logger.info("Integrity run cancellation signal sent", extra={"run_id": run_id, "request_id": request_id})
-            
-            # Update run status in Firestore
-            try:
-                from .clients.firestore import FirestoreClient
-                from .config.settings import FirestoreConfig
-                from .config.config_loader import load_runtime_config
-                
-                config = load_runtime_config()
-                firestore_client = FirestoreClient(config.firestore)
-                firestore_client.record_run(
-                    run_id,
-                    {
-                        "status": "cancelled",
-                        "ended_at": datetime.now(timezone.utc),
-                    },
-                )
-                
-                # Log cancellation
-                from .writers.firestore_writer import FirestoreWriter
-                writer = FirestoreWriter(firestore_client)
-                writer.write_log(run_id, "info", "Scan cancelled by user")
-            except Exception as exc:
-                logger.warning(
-                    "Failed to update run status after cancellation",
-                    extra={"run_id": run_id, "error": str(exc)},
-                )
-            
-            return {"status": "success", "message": "Run cancellation requested", "run_id": run_id}
-        else:
-            logger.warning("Integrity run not found or already completed", extra={"run_id": run_id, "request_id": request_id})
+    
+    # Always update Firestore status (works even if run is in different process/server)
+    try:
+        from .clients.firestore import FirestoreClient
+        from .config.config_loader import load_runtime_config
+        from .writers.firestore_writer import FirestoreWriter
+        
+        config = load_runtime_config()
+        firestore_client = FirestoreClient(config.firestore)
+        
+        # Check if run exists and is still running by querying Firestore directly
+        client = firestore_client._get_client()
+        doc_ref = client.collection(config.firestore.runs_collection).document(run_id)
+        run_doc = doc_ref.get()
+        
+        if not run_doc.exists:
+            logger.warning("Run not found in Firestore", extra={"run_id": run_id, "request_id": request_id})
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": "Run not found or already completed", "run_id": run_id},
+                detail={"error": "Run not found", "run_id": run_id},
             )
+        
+        run_data = run_doc.to_dict()
+        
+        # Check if run is already completed
+        # Only check status, not ended_at, since ended_at might be set incorrectly
+        # or in a race condition while status is still "running"
+        run_status = run_data.get("status", "").lower()
+        completed_statuses = ["success", "error", "warning", "cancelled", "canceled", "healthy"]
+        if run_status in completed_statuses:
+            logger.info("Run already completed, cannot cancel", extra={"run_id": run_id, "status": run_data.get("status"), "request_id": request_id})
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Run already completed", "message": f"Run has already completed with status: {run_data.get('status')}", "run_id": run_id, "status": run_data.get("status")},
+            )
+        
+        # If status is missing or empty, treat as running (allow cancellation)
+        # This handles edge cases where status wasn't set properly
+        
+        # Calculate duration from start time to now
+        started_at = run_data.get("started_at")
+        end_time = datetime.now(timezone.utc)
+        
+        duration_ms = 0
+        if started_at:
+            try:
+                # Convert Firestore timestamp to datetime
+                start_dt = None
+                
+                # Check if it's a Firestore Timestamp object
+                if hasattr(started_at, 'timestamp'):
+                    # Firestore Timestamp object - use timestamp() method
+                    start_ts = started_at.timestamp()
+                    end_ts = end_time.timestamp()
+                    duration_ms = int((end_ts - start_ts) * 1000)
+                elif isinstance(started_at, datetime):
+                    # Already a datetime object
+                    if started_at.tzinfo is None:
+                        # Assume UTC if no timezone
+                        start_dt = started_at.replace(tzinfo=timezone.utc)
+                    else:
+                        start_dt = started_at
+                    duration_ms = int((end_time - start_dt).total_seconds() * 1000)
+                else:
+                    # Try other conversion methods
+                    if hasattr(started_at, 'toDate'):
+                        start_dt = started_at.toDate()
+                        if start_dt.tzinfo is None:
+                            start_dt = start_dt.replace(tzinfo=timezone.utc)
+                        duration_ms = int((end_time - start_dt).total_seconds() * 1000)
+                    else:
+                        # Fallback: try to parse as string or use existing duration
+                        logger.warning(
+                            "Could not parse started_at timestamp",
+                            extra={"run_id": run_id, "started_at_type": str(type(started_at)), "request_id": request_id},
+                        )
+                        duration_ms = run_data.get("duration_ms", 0)
+                
+                # Ensure duration is not negative (sanity check)
+                if duration_ms < 0:
+                    logger.warning(
+                        "Calculated negative duration, using existing or 0",
+                        extra={"run_id": run_id, "calculated_duration_ms": duration_ms, "request_id": request_id},
+                    )
+                    duration_ms = run_data.get("duration_ms", 0)
+                    
+            except Exception as exc:
+                logger.warning(
+                    "Failed to calculate duration on cancel",
+                    extra={"run_id": run_id, "error": str(exc), "started_at_type": str(type(started_at)), "request_id": request_id},
+                    exc_info=True,
+                )
+                # Try to get existing duration_ms if calculation failed
+                duration_ms = run_data.get("duration_ms", 0)
+        
+        # Preserve existing timing breakdown metrics if they exist
+        update_data = {
+            "status": "cancelled",  # Use lowercase to match integrity runner
+            "ended_at": end_time,
+            "duration_ms": duration_ms,
+        }
+        
+        # Preserve timing breakdown if it exists
+        if "duration_fetch" in run_data:
+            update_data["duration_fetch"] = run_data["duration_fetch"]
+        if "duration_checks" in run_data:
+            update_data["duration_checks"] = run_data["duration_checks"]
+        if "duration_write_airtable" in run_data:
+            update_data["duration_write_airtable"] = run_data["duration_write_airtable"]
+        if "duration_write_firestore" in run_data:
+            update_data["duration_write_firestore"] = run_data["duration_write_firestore"]
+        if "duration_write_issues_firestore" in run_data:
+            update_data["duration_write_issues_firestore"] = run_data["duration_write_issues_firestore"]
+        
+        # Update run status to Canceled with duration
+        firestore_client.record_run(run_id, update_data)
+        
+        # Log cancellation
+        writer = FirestoreWriter(firestore_client)
+        writer.write_log(run_id, "info", "Scan cancelled by user")
+        
+        logger.info("Run cancelled successfully", extra={"run_id": run_id, "request_id": request_id})
+        return {"status": "success", "message": "Run cancellation requested", "run_id": run_id}
+        
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to cancel run",
+            extra={"run_id": run_id, "error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to cancel run", "message": str(exc)},
+        )
 
 
 @app.delete("/integrity/run/{run_id}", dependencies=[Depends(verify_cloud_scheduler_auth)])

@@ -116,7 +116,7 @@ class IntegrityRunner:
         except: pass
         # #endregion agent log
 
-    def run(self, mode: str = "incremental", trigger: str = "manual", cancel_event=None) -> Dict[str, Any]:
+    def run(self, mode: str = "incremental", trigger: str = "manual", cancel_event=None, entities: List[str] | None = None) -> Dict[str, Any]:
         # Explicitly reference module-level time to avoid UnboundLocalError
         # (Python may treat time as local if used in nested scopes)
         import time as _time_module
@@ -134,6 +134,9 @@ class IntegrityRunner:
         
         # Store run_id for use in _fetch_records
         self._current_run_id = run_id
+        
+        # Store selected entities for use in _fetch_records
+        self._selected_entities = entities
         
         # Helper to check cancellation
         def check_cancelled():
@@ -370,9 +373,13 @@ class IntegrityRunner:
 
             # Fetch records
             try:
-                self._firestore_writer.write_log(run_id, "info", f"Starting to fetch records (mode: {mode})...")
+                entities_param = getattr(self, '_selected_entities', None)
+                if entities_param:
+                    self._firestore_writer.write_log(run_id, "info", f"Starting to fetch records (mode: {mode}, entities: {', '.join(entities_param)})...")
+                else:
+                    self._firestore_writer.write_log(run_id, "info", f"Starting to fetch records (mode: {mode})...")
                 with timed("fetch", metrics):
-                    records, entity_counts = self._fetch_records(mode)
+                    records, entity_counts = self._fetch_records(mode, entities_param)
                 fetch_duration = metrics.get("duration_fetch", 0)
                 total_records = sum(entity_counts.values())
                 log_fetch(logger, run_id, entity_counts, fetch_duration)
@@ -689,8 +696,13 @@ class IntegrityRunner:
 
         return result
 
-    def _fetch_records(self, mode: str) -> Tuple[Dict[str, List[dict]], Dict[str, int]]:
-        """Fetch records, optionally using incremental mode based on last successful run."""
+    def _fetch_records(self, mode: str, entities: List[str] | None = None) -> Tuple[Dict[str, List[dict]], Dict[str, int]]:
+        """Fetch records, optionally using incremental mode based on last successful run.
+        
+        Args:
+            mode: Scan mode ("incremental" or "full")
+            entities: Optional list of entity names to fetch. If None, fetches all entities.
+        """
         incremental_since = None
         if mode == "incremental":
             incremental_since = self._firestore_client.get_last_successful_run_timestamp()
@@ -705,6 +717,12 @@ class IntegrityRunner:
             logger.info("Performing full scan (mode=full)")
         
         fetchers = build_fetchers(self._airtable_client)
+        
+        # Filter fetchers by selected entities if provided
+        if entities:
+            fetchers = {key: fetcher for key, fetcher in fetchers.items() if key in entities}
+            logger.info(f"Filtered to {len(fetchers)} entities: {', '.join(entities)}")
+        
         records: Dict[str, List[dict]] = {}
         counts: Dict[str, int] = {}
         for key, fetcher in fetchers.items():
