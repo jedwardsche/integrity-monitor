@@ -47,7 +47,15 @@ export function useFirestoreRuns(limitCount: number = 10) {
               trigger: data.trigger || (data.mode === "full" ? "weekly" : "nightly"),
               time: timeStr,
               anomalies: data.counts?.total || 0,
-              status: data.status === "error" ? "Error" : data.status === "warning" ? "Warning" : data.status === "running" ? "Running" : "Healthy",
+              status: (() => {
+                const statusLower = (data.status || "").toLowerCase();
+                if (statusLower === "error") return "Error";
+                if (statusLower === "warning") return "Warning";
+                if (statusLower === "running") return "Running";
+                if (statusLower === "cancelled" || statusLower === "canceled") return "Cancelled";
+                if (statusLower === "success" || statusLower === "healthy") return "Healthy";
+                return data.status || "Unknown";
+              })(),
               duration: data.duration_ms
                 ? `${Math.floor(data.duration_ms / 60000)}m ${Math.floor((data.duration_ms % 60000) / 1000)}s`
                 : "N/A",

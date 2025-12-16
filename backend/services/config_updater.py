@@ -236,11 +236,12 @@ def update_config(
     env_path: Optional[Path] = None,
     firestore_client: Optional[Any] = None,
     use_firestore: bool = True,
+    update_env: bool = False,
 ) -> Dict[str, Dict[str, bool]]:
     """Update configuration with discovered table IDs and base IDs.
-    
+
     Updates both .env file (for local dev) and Firestore config (for production).
-    
+
     Args:
         table_ids: Dictionary mapping entity names to table IDs
         base_id: Optional base ID to set for all entities
@@ -248,7 +249,8 @@ def update_config(
         env_path: Optional path to .env file
         firestore_client: Optional FirestoreClient instance
         use_firestore: Whether to update Firestore config (default: True)
-        
+        update_env: Whether to update .env file (default: False to prevent reload loops)
+
     Returns:
         Dictionary with "env" and "firestore" keys, each containing update results
     """
@@ -256,13 +258,18 @@ def update_config(
         "env": {},
         "firestore": {},
     }
-    
-    # Always update .env file for local development
-    try:
-        results["env"] = update_env_file(table_ids, base_id=base_id, entities=entities, env_path=env_path)
-    except Exception as exc:
-        logger.error(f"Failed to update .env file: {exc}", exc_info=True)
-        results["env"] = {entity: False for entity in table_ids.keys()}
+
+    # Skip .env file updates by default to avoid triggering uvicorn --reload
+    # Environment variables are set dynamically in the process during scans
+    if update_env:
+        try:
+            results["env"] = update_env_file(table_ids, base_id=base_id, entities=entities, env_path=env_path)
+        except Exception as exc:
+            logger.error(f"Failed to update .env file: {exc}", exc_info=True)
+            results["env"] = {entity: False for entity in table_ids.keys()}
+    else:
+        # Skip .env updates - IDs are set dynamically in process environment
+        results["env"] = {entity: True for entity in table_ids.keys()}  # Mark as "success" (skipped)
     
     # Update Firestore config if available
     if use_firestore:

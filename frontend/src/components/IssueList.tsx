@@ -164,7 +164,8 @@ export function IssueList({
 
       {loading && (
         <div className="text-center py-8 text-[var(--text-muted)]">
-          Loading issues...
+          <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--brand)] mb-2"></div>
+          <p>Loading issues...</p>
         </div>
       )}
 
@@ -180,7 +181,7 @@ export function IssueList({
         </div>
       )}
 
-      {!loading && issues.length > 0 && (
+      {!loading && !error && issues.length > 0 && (
         <>
           <div className="overflow-hidden rounded-3xl border border-[var(--border)] bg-white">
             <table className="w-full text-left text-sm">
