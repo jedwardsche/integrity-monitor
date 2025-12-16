@@ -10,9 +10,7 @@ import { ToastContainer } from "./components/Toast";
 import databaseSearchIcon from "./assets/database_search.svg";
 import scanDocumentIcon from "./assets/scan_document.svg";
 
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ||
-  window.location.origin;
+import { API_BASE } from "./config/api";
 
 interface AppProps {
   children: ReactNode;
