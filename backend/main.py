@@ -104,20 +104,37 @@ app.add_middleware(RequestIDMiddleware)
 # #region agent log
 try:
     with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:51","message":"Starting schema config load","data":{"step":"before_load_schema_config"},"timestamp":int(time.time()*1000)})+'\n')
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:104","message":"Starting schema config load","data":{"step":"before_load_schema_config"},"timestamp":int(time.time()*1000)})+'\n')
 except: pass
 # #endregion agent log
 
-schema_config = load_schema_config()
+# Load schema config with error handling
+try:
+    schema_config = load_schema_config()
+    logger.info("Schema config loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load schema config: {e}", exc_info=True)
+    # Create a minimal schema config to allow app to start
+    from .config.models import SchemaConfig
+    schema_config = SchemaConfig(entities={})
+    logger.warning("Using empty schema config due to load failure")
 
 # #region agent log
 try:
     with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:52","message":"Schema config loaded, starting IntegrityRunner init","data":{"step":"before_integrity_runner"},"timestamp":int(time.time()*1000)})+'\n')
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"B","location":"main.py:120","message":"Schema config loaded, starting IntegrityRunner init","data":{"step":"before_integrity_runner","schema_loaded":True},"timestamp":int(time.time()*1000)})+'\n')
 except: pass
 # #endregion agent log
 
-runner = IntegrityRunner()
+# Initialize IntegrityRunner with error handling
+try:
+    runner = IntegrityRunner()
+    logger.info("IntegrityRunner initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize IntegrityRunner: {e}", exc_info=True)
+    # Set runner to None - endpoints that need it will handle the error
+    runner = None
+    logger.warning("IntegrityRunner not available - some endpoints may fail")
 
 # Global dictionary to track running scans: {run_id: threading.Event}
 running_scans: dict[str, threading.Event] = {}
@@ -126,14 +143,42 @@ running_scans_lock = threading.Lock()
 # #region agent log
 try:
     with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:53","message":"IntegrityRunner initialized, module load complete","data":{"step":"after_integrity_runner"},"timestamp":int(time.time()*1000)})+'\n')
+        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"C","location":"main.py:135","message":"Startup complete","data":{"step":"after_integrity_runner","runner_available":runner is not None},"timestamp":int(time.time()*1000)})+'\n')
 except: pass
 # #endregion agent log
+
+logger.info("FastAPI application startup complete")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Log when the application is ready to accept requests."""
+    import sys
+    logger.info(
+        "Application startup event triggered",
+        extra={
+            "python_version": sys.version,
+            "port": os.getenv("PORT", "8080"),
+            "runner_available": runner is not None,
+            "schema_loaded": schema_config is not None,
+        }
+    )
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Log when the application is shutting down."""
+    logger.info("Application shutdown event triggered")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Health check endpoint - should always respond even if other services fail."""
+    return {
+        "status": "ok",
+        "runner_available": runner is not None,
+        "schema_loaded": schema_config is not None,
+    }
 
 
 @app.get("/auth/dev-token")
@@ -307,6 +352,8 @@ def get_dev_token(email: str = "jedwards@che.school"):
 @app.get("/schema", dependencies=[Depends(verify_bearer_token)])
 def schema():
     """Expose the current schema configuration (requires authentication)."""
+    if schema_config is None:
+        raise HTTPException(status_code=500, detail="Schema config not loaded")
     return schema_config.model_dump()
 
 
@@ -314,6 +361,9 @@ def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event
     """Run integrity scan in background thread."""
     try:
         # Create a new runner instance for this thread
+        if runner is None:
+            logger.error("IntegrityRunner not available - cannot start scan", extra={"run_id": run_id})
+            return
         thread_runner = IntegrityRunner()
         result = thread_runner.run(run_id=run_id, mode=mode, trigger=trigger, cancel_event=cancel_event, entities=entities)
         logger.info(
