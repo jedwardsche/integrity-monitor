@@ -276,6 +276,37 @@ if [ "$DEPLOY_BACKEND" = true ]; then
 
     print_status "Building and deploying backend container..."
 
+    # Check for required secrets
+    print_status "Checking for required secrets in Secret Manager..."
+    REQUIRED_SECRETS=(
+        "AIRTABLE_PAT"
+        "API_AUTH_TOKEN"
+    )
+    
+    MISSING_SECRETS=()
+    for secret in "${REQUIRED_SECRETS[@]}"; do
+        if ! gcloud secrets describe "$secret" --project="$PROJECT_ID" &>/dev/null; then
+            MISSING_SECRETS+=("$secret")
+        fi
+    done
+    
+    if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
+        print_error "Missing secrets in Secret Manager:"
+        for secret in "${MISSING_SECRETS[@]}"; do
+            echo "  - ${secret}"
+        done
+        echo ""
+        print_warning "Create the missing secrets using:"
+        echo "  ./deploy/create-secrets.sh"
+        echo ""
+        print_warning "Or create them manually:"
+        echo "  gcloud secrets create SECRET_NAME --data-file=- --project=${PROJECT_ID}"
+        echo ""
+        exit 1
+    else
+        print_success "All required secrets found"
+    fi
+
     # Check if custom service account exists
     CUSTOM_SERVICE_ACCOUNT="integrity-runner@${PROJECT_ID}.iam.gserviceaccount.com"
     DEFAULT_SERVICE_ACCOUNT="${PROJECT_ID}-compute@developer.gserviceaccount.com"
@@ -330,24 +361,8 @@ if [ "$DEPLOY_BACKEND" = true ]; then
         "--min-instances" "0"
         "--max-instances" "10"
         "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
-        "--set-secrets" "AIRTABLE_API_KEY=AIRTABLE_API_KEY:latest"
+        "--set-secrets" "AIRTABLE_PAT=AIRTABLE_PAT:latest"
         "--set-secrets" "API_AUTH_TOKEN=API_AUTH_TOKEN:latest"
-        "--set-secrets" "AT_STUDENTS_BASE=AT_STUDENTS_BASE:latest"
-        "--set-secrets" "AT_STUDENTS_TABLE=AT_STUDENTS_TABLE:latest"
-        "--set-secrets" "AT_PARENTS_BASE=AT_PARENTS_BASE:latest"
-        "--set-secrets" "AT_PARENTS_TABLE=AT_PARENTS_TABLE:latest"
-        "--set-secrets" "AT_CONTRACTORS_BASE=AT_CONTRACTORS_BASE:latest"
-        "--set-secrets" "AT_CONTRACTORS_TABLE=AT_CONTRACTORS_TABLE:latest"
-        "--set-secrets" "AT_CLASSES_BASE=AT_CLASSES_BASE:latest"
-        "--set-secrets" "AT_CLASSES_TABLE=AT_CLASSES_TABLE:latest"
-        "--set-secrets" "AT_ATTENDANCE_BASE=AT_ATTENDANCE_BASE:latest"
-        "--set-secrets" "AT_ATTENDANCE_TABLE=AT_ATTENDANCE_TABLE:latest"
-        "--set-secrets" "AT_TRUTH_BASE=AT_TRUTH_BASE:latest"
-        "--set-secrets" "AT_TRUTH_TABLE=AT_TRUTH_TABLE:latest"
-        "--set-secrets" "AT_PAYMENTS_BASE=AT_PAYMENTS_BASE:latest"
-        "--set-secrets" "AT_PAYMENTS_TABLE=AT_PAYMENTS_TABLE:latest"
-        "--set-secrets" "AT_DATA_ISSUES_BASE=AT_DATA_ISSUES_BASE:latest"
-        "--set-secrets" "AT_DATA_ISSUES_TABLE=AT_DATA_ISSUES_TABLE:latest"
         "--project" "$PROJECT_ID"
     )
 
@@ -378,24 +393,8 @@ if [ "$DEPLOY_BACKEND" = true ]; then
             "--min-instances" "0"
             "--max-instances" "10"
             "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
-            "--set-secrets" "AIRTABLE_API_KEY=AIRTABLE_API_KEY:latest"
+            "--set-secrets" "AIRTABLE_PAT=AIRTABLE_PAT:latest"
             "--set-secrets" "API_AUTH_TOKEN=API_AUTH_TOKEN:latest"
-            "--set-secrets" "AT_STUDENTS_BASE=AT_STUDENTS_BASE:latest"
-            "--set-secrets" "AT_STUDENTS_TABLE=AT_STUDENTS_TABLE:latest"
-            "--set-secrets" "AT_PARENTS_BASE=AT_PARENTS_BASE:latest"
-            "--set-secrets" "AT_PARENTS_TABLE=AT_PARENTS_TABLE:latest"
-            "--set-secrets" "AT_CONTRACTORS_BASE=AT_CONTRACTORS_BASE:latest"
-            "--set-secrets" "AT_CONTRACTORS_TABLE=AT_CONTRACTORS_TABLE:latest"
-            "--set-secrets" "AT_CLASSES_BASE=AT_CLASSES_BASE:latest"
-            "--set-secrets" "AT_CLASSES_TABLE=AT_CLASSES_TABLE:latest"
-            "--set-secrets" "AT_ATTENDANCE_BASE=AT_ATTENDANCE_BASE:latest"
-            "--set-secrets" "AT_ATTENDANCE_TABLE=AT_ATTENDANCE_TABLE:latest"
-            "--set-secrets" "AT_TRUTH_BASE=AT_TRUTH_BASE:latest"
-            "--set-secrets" "AT_TRUTH_TABLE=AT_TRUTH_TABLE:latest"
-            "--set-secrets" "AT_PAYMENTS_BASE=AT_PAYMENTS_BASE:latest"
-            "--set-secrets" "AT_PAYMENTS_TABLE=AT_PAYMENTS_TABLE:latest"
-            "--set-secrets" "AT_DATA_ISSUES_BASE=AT_DATA_ISSUES_BASE:latest"
-            "--set-secrets" "AT_DATA_ISSUES_TABLE=AT_DATA_ISSUES_TABLE:latest"
             "--project" "$PROJECT_ID"
         )
         "${DEPLOY_CMD[@]}"
