@@ -1,9 +1,7 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useRunStatus } from "../hooks/useRunStatus";
 import { useRunLogs } from "../hooks/useRunLogs";
-import { RunDetailModal } from "../components/RunDetailModal";
-import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
 import { useAuth } from "../hooks/useAuth";
 
 export function RunStatusPage() {
@@ -11,11 +9,9 @@ export function RunStatusPage() {
   const navigate = useNavigate();
   const { runStatus, loading, error } = useRunStatus(runId || null);
   const { logs, loading: logsLoading } = useRunLogs(runId || null);
-  const logsEndRef = useRef<HTMLDivElement>(null);
   const { getToken } = useAuth();
   const [isCancelling, setIsCancelling] = useState(false);
 
-  // Auto-scroll to bottom when new logs arrive (only when scan is running)
   // Calculate isRunning safely - will be false if runStatus is not available yet
   const statusLower = runStatus?.status?.toLowerCase() || "";
   const isRunning = runStatus
@@ -27,11 +23,6 @@ export function RunStatusPage() {
       statusLower !== "warning" &&
       statusLower !== "healthy"
     : false;
-  useEffect(() => {
-    if (logsEndRef.current && isRunning) {
-      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [logs, isRunning]);
 
   if (loading) {
     return (
@@ -79,11 +70,16 @@ export function RunStatusPage() {
     );
   }
 
+  // Calculate startTime for display (always needed)
   const startTime =
     runStatus.started_at?.toDate?.() ||
     new Date(runStatus.started_at || Date.now());
   const endTime = runStatus.ended_at?.toDate?.() || null;
-  const elapsed = endTime
+  
+  // Prefer duration_ms from Firestore if available, otherwise calculate from timestamps
+  const elapsed = runStatus.duration_ms
+    ? Math.floor(runStatus.duration_ms / 1000)
+    : endTime
     ? Math.floor((endTime.getTime() - startTime.getTime()) / 1000)
     : Math.floor((Date.now() - startTime.getTime()) / 1000);
 
@@ -415,14 +411,14 @@ export function RunStatusPage() {
             </div>
             <div className="text-sm text-[var(--text-muted)]">
               {logs.length > 0
-                ? logs[logs.length - 1]?.message || "Initializing..."
+                ? logs[0]?.message || "Initializing..."
                 : "Waiting for logs..."}
             </div>
           </div>
           {(() => {
             const latestLog =
               logs.length > 0
-                ? logs[logs.length - 1]?.message?.toLowerCase() || ""
+                ? logs[0]?.message?.toLowerCase() || ""
                 : "";
             let progress = 0;
             let stageLabel = "Initializing";
@@ -546,7 +542,7 @@ export function RunStatusPage() {
               No logs available yet
             </div>
           )}
-          {logs.map((log) => {
+          {[...logs].reverse().map((log) => {
             const timestamp =
               log.timestamp?.toDate?.() ||
               new Date(log.timestamp || Date.now());
@@ -575,7 +571,6 @@ export function RunStatusPage() {
               </div>
             );
           })}
-          <div ref={logsEndRef} />
         </div>
       </div>
     </div>

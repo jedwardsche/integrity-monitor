@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Set
 
 try:
     from google.cloud import firestore
@@ -220,6 +222,77 @@ class FirestoreClient:
             )
             return None
 
+    def _generate_doc_id(self, issue: Dict[str, Any]) -> str:
+        """Generate a Firestore document ID from an issue.
+        
+        Uses rule_id + record_id as the base, with sanitization for Firestore
+        document ID requirements (1500 byte limit, character restrictions).
+        
+        Args:
+            issue: Issue dictionary with rule_id and record_id
+            
+        Returns:
+            Valid Firestore document ID
+        """
+        doc_id_parts = f"{issue.get('rule_id', '')}_{issue.get('record_id', '')}"
+
+        # Check if we need to hash (length exceeds 1500 bytes)
+        if len(doc_id_parts.encode('utf-8')) > 1500:
+            doc_id = hashlib.sha256(doc_id_parts.encode('utf-8')).hexdigest()
+        else:
+            # Sanitize invalid characters
+            doc_id = doc_id_parts.replace('/', '_').replace('\\', '_')
+            # Remove leading/trailing periods
+            doc_id = doc_id.strip('.')
+            # Replace consecutive periods with single period
+            doc_id = re.sub(r'\.{2,}', '.', doc_id)
+            # Ensure it doesn't match __.*__ pattern by replacing if needed
+            if re.match(r'^__.*__$', doc_id):
+                doc_id = f"id_{doc_id}"
+            # Ensure not solely . or .. or empty
+            if doc_id in ('', '.', '..'):
+                doc_id = hashlib.sha256(doc_id_parts.encode('utf-8')).hexdigest()
+        
+        return doc_id
+
+    def _check_existing_documents(self, collection_ref: Any, doc_ids: list[str]) -> Set[str]:
+        """Check which documents already exist in Firestore.
+        
+        Args:
+            collection_ref: Firestore collection reference
+            doc_ids: List of document IDs to check
+            
+        Returns:
+            Set of document IDs that already exist
+        """
+        if not doc_ids:
+            return set()
+        
+        existing_ids: Set[str] = set()
+        
+        # Firestore get_all() can handle up to 100 document references per call
+        # Split into chunks of 100
+        chunk_size = 100
+        for i in range(0, len(doc_ids), chunk_size):
+            chunk = doc_ids[i:i + chunk_size]
+            doc_refs = [collection_ref.document(doc_id) for doc_id in chunk]
+            
+            try:
+                # Batch read documents
+                docs = self._get_client().get_all(doc_refs)
+                for doc in docs:
+                    if doc.exists:
+                        existing_ids.add(doc.id)
+            except Exception as exc:
+                logger.warning(
+                    "Error checking existing documents",
+                    extra={"error": str(exc), "chunk_size": len(chunk)},
+                    exc_info=True,
+                )
+                # Continue with other chunks even if one fails
+        
+        return existing_ids
+
     def record_issues(self, issues: list[Dict[str, Any]], progress_callback: Optional[Callable[[int, int, float], None]] = None) -> None:
         """Write individual issues to Firestore integrity_issues collection.
         
@@ -235,36 +308,41 @@ class FirestoreClient:
             client = self._get_client()
             collection_ref = client.collection(self._config.issues_collection)
             
+            # Generate all document IDs first
+            issue_doc_pairs = []
+            for issue in issues:
+                doc_id = self._generate_doc_id(issue)
+                issue_doc_pairs.append((doc_id, issue))
+            
+            # Check which documents already exist
+            all_doc_ids = [doc_id for doc_id, _ in issue_doc_pairs]
+            existing_ids = self._check_existing_documents(collection_ref, all_doc_ids)
+            
+            # Filter out issues that already exist
+            new_issues = [(doc_id, issue) for doc_id, issue in issue_doc_pairs if doc_id not in existing_ids]
+            skipped_count = len(issue_doc_pairs) - len(new_issues)
+            
+            if skipped_count > 0:
+                logger.info(
+                    "Skipping duplicate issues",
+                    extra={"skipped": skipped_count, "total": len(issue_doc_pairs)},
+                )
+            
+            if not new_issues:
+                logger.info("All issues already exist in Firestore, nothing to write")
+                if progress_callback:
+                    try:
+                        progress_callback(len(issue_doc_pairs), len(issue_doc_pairs), 100.0)
+                    except Exception:
+                        pass
+                return
+            
             batch = client.batch()
             batch_count = 0
             total_written = 0
-            total_issues = len(issues)
+            total_new_issues = len(new_issues)
             
-            for issue in issues:
-                # Use rule_id + record_id as document ID for deduplication
-                # Firestore document IDs have a 1500 byte limit and character restrictions
-                import hashlib
-                import re
-
-                doc_id_parts = f"{issue.get('rule_id', '')}_{issue.get('record_id', '')}"
-
-                # Check if we need to hash (length exceeds 1500 bytes)
-                if len(doc_id_parts.encode('utf-8')) > 1500:
-                    doc_id = hashlib.sha256(doc_id_parts.encode('utf-8')).hexdigest()
-                else:
-                    # Sanitize invalid characters
-                    doc_id = doc_id_parts.replace('/', '_').replace('\\', '_')
-                    # Remove leading/trailing periods
-                    doc_id = doc_id.strip('.')
-                    # Replace consecutive periods with single period
-                    doc_id = re.sub(r'\.{2,}', '.', doc_id)
-                    # Ensure it doesn't match __.*__ pattern by replacing if needed
-                    if re.match(r'^__.*__$', doc_id):
-                        doc_id = f"id_{doc_id}"
-                    # Ensure not solely . or .. or empty
-                    if doc_id in ('', '.', '..'):
-                        doc_id = hashlib.sha256(doc_id_parts.encode('utf-8')).hexdigest()
-                
+            for doc_id, issue in new_issues:
                 doc_ref = collection_ref.document(doc_id)
                 
                 # Prepare issue data with timestamps
@@ -282,14 +360,22 @@ class FirestoreClient:
                 if batch_count >= 500:
                     batch.commit()
                     total_written += batch_count
-                    percentage = (total_written / total_issues * 100) if total_issues > 0 else 0
+                    percentage = (total_written / total_new_issues * 100) if total_new_issues > 0 else 0
                     logger.info(
                         "Wrote batch of issues to Firestore",
-                        extra={"batch_size": batch_count, "total_written": total_written, "total": total_issues, "percentage": round(percentage, 1)},
+                        extra={
+                            "batch_size": batch_count,
+                            "total_written": total_written,
+                            "total_new": total_new_issues,
+                            "skipped": skipped_count,
+                            "percentage": round(percentage, 1),
+                        },
                     )
                     if progress_callback:
                         try:
-                            progress_callback(total_written, total_issues, percentage)
+                            # Progress callback uses original total for user-facing progress
+                            original_total = len(issue_doc_pairs)
+                            progress_callback(total_written, original_total, (total_written / original_total * 100) if original_total > 0 else 0)
                         except Exception:
                             pass  # Don't fail on progress callback errors
                     batch = client.batch()
@@ -299,10 +385,10 @@ class FirestoreClient:
             if batch_count > 0:
                 batch.commit()
                 total_written += batch_count
-                percentage = (total_written / total_issues * 100) if total_issues > 0 else 0
                 if progress_callback:
                     try:
-                        progress_callback(total_written, total_issues, percentage)
+                        original_total = len(issue_doc_pairs)
+                        progress_callback(total_written, original_total, (total_written / original_total * 100) if original_total > 0 else 0)
                     except Exception:
                         pass  # Don't fail on progress callback errors
                 # Explicitly close batch (though Python GC handles it, this is cleaner)
@@ -310,7 +396,12 @@ class FirestoreClient:
             
             logger.info(
                 "Recorded issues to Firestore",
-                extra={"collection": self._config.issues_collection, "total_issues": total_written},
+                extra={
+                    "collection": self._config.issues_collection,
+                    "total_written": total_written,
+                    "skipped_duplicates": skipped_count,
+                    "total_checked": len(issue_doc_pairs),
+                },
             )
         except Exception as exc:
             logger.error(
