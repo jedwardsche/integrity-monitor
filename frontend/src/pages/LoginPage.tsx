@@ -55,9 +55,6 @@ export function LoginPage() {
     }
     setError(null);
     try {
-      const API_BASE =
-        (import.meta.env.VITE_API_BASE as string | undefined) ||
-        window.location.origin;
       const response = await fetch(
         `${API_BASE}/auth/dev-token?email=jedwards@che.school`,
         {

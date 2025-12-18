@@ -1,0 +1,83 @@
+# Git
+.git
+.gitignore
+
+# Node modules
+node_modules
+frontend/node_modules
+functions/node_modules
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+backend/venv/
+backend/.venv/
+*.egg-info
+.pytest_cache
+**/venv/
+**/.venv/
+
+# Environment files
+.env
+.env.*
+backend/.env
+frontend/.env
+
+# Service account credentials (should use secrets in production)
+*service*account*.json
+*credentials*.json
+
+# Logs
+*.log
+logs/
+backend.log
+frontend.log
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Firebase
+.firebase
+firebase-debug.log
+
+# Build artifacts
+dist
+build
+*.egg
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Test files
+backend/tests/
+backend/test_*.py
+backend/pytest.ini
+
+# Scripts (not needed in production)
+backend/scripts/
+backend/setup_admin_user.py
+backend/test_firebase_auth.py
+
+# Frontend (not needed for backend)
+frontend/
+
+# Functions (not needed for backend)
+functions/
+
+# Deploy scripts
+deploy/
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+
