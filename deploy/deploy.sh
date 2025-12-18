@@ -278,13 +278,43 @@ if [ "$DEPLOY_BACKEND" = true ]; then
 
     # Check if custom service account exists
     CUSTOM_SERVICE_ACCOUNT="integrity-runner@${PROJECT_ID}.iam.gserviceaccount.com"
-    SERVICE_ACCOUNT="${PROJECT_ID}-compute@developer.gserviceaccount.com"
+    DEFAULT_SERVICE_ACCOUNT="${PROJECT_ID}-compute@developer.gserviceaccount.com"
+    SERVICE_ACCOUNT="$DEFAULT_SERVICE_ACCOUNT"
     
     if gcloud iam service-accounts describe "$CUSTOM_SERVICE_ACCOUNT" --project "$PROJECT_ID" &>/dev/null; then
         SERVICE_ACCOUNT="$CUSTOM_SERVICE_ACCOUNT"
         print_status "Using custom service account: ${SERVICE_ACCOUNT}"
     else
         print_status "Using default compute service account: ${SERVICE_ACCOUNT}"
+        print_status "Ensuring Secret Manager permissions are granted..."
+        
+        # Grant Secret Manager Secret Accessor role to default compute service account
+        if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member="serviceAccount:${SERVICE_ACCOUNT}" \
+            --role="roles/secretmanager.secretAccessor" \
+            --condition=None \
+            &>/dev/null; then
+            print_success "Granted Secret Manager access to default service account"
+        else
+            # Try with explicit project flag
+            if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+                --member="serviceAccount:${SERVICE_ACCOUNT}" \
+                --role="roles/secretmanager.secretAccessor" \
+                --project="$PROJECT_ID" \
+                &>/dev/null; then
+                print_success "Granted Secret Manager access to default service account"
+            else
+                print_warning "Could not automatically grant Secret Manager access."
+                print_warning "Please run this command manually:"
+                echo ""
+                echo "  gcloud projects add-iam-policy-binding ${PROJECT_ID} \\"
+                echo "    --member=\"serviceAccount:${SERVICE_ACCOUNT}\" \\"
+                echo "    --role=\"roles/secretmanager.secretAccessor\""
+                echo ""
+                print_warning "Or run: ./deploy/iam-setup.sh to set up a custom service account with permissions"
+                echo ""
+            fi
+        fi
     fi
 
     # Build base deploy command
