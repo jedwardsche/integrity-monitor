@@ -6,6 +6,10 @@ const BASE_MAPPINGS: Record<string, string> = {
   students: import.meta.env.VITE_AIRTABLE_STUDENTS_BASE || "",
   parents: import.meta.env.VITE_AIRTABLE_PARENTS_BASE || "",
   contractors: import.meta.env.VITE_AIRTABLE_CONTRACTORS_BASE || "",
+  classes: import.meta.env.VITE_AIRTABLE_CLASSES_BASE || "",
+  attendance: import.meta.env.VITE_AIRTABLE_ATTENDANCE_BASE || "",
+  truth: import.meta.env.VITE_AIRTABLE_TRUTH_BASE || "",
+  payments: import.meta.env.VITE_AIRTABLE_PAYMENTS_BASE || "",
   data_issues: import.meta.env.VITE_AIRTABLE_DATA_ISSUES_BASE || "",
 };
 
@@ -13,6 +17,10 @@ const TABLE_MAPPINGS: Record<string, string> = {
   students: import.meta.env.VITE_AIRTABLE_STUDENTS_TABLE || "",
   parents: import.meta.env.VITE_AIRTABLE_PARENTS_TABLE || "",
   contractors: import.meta.env.VITE_AIRTABLE_CONTRACTORS_TABLE || "",
+  classes: import.meta.env.VITE_AIRTABLE_CLASSES_TABLE || "",
+  attendance: import.meta.env.VITE_AIRTABLE_ATTENDANCE_TABLE || "",
+  truth: import.meta.env.VITE_AIRTABLE_TRUTH_TABLE || "",
+  payments: import.meta.env.VITE_AIRTABLE_PAYMENTS_TABLE || "",
   data_issues: import.meta.env.VITE_AIRTABLE_DATA_ISSUES_TABLE || "",
 };
 
@@ -28,20 +36,75 @@ export function getAirtableRecordLink(baseId: string, tableId: string, recordId:
 }
 
 /**
+ * Generate an Airtable link to a table (without specific record).
+ * @param baseId - Airtable base ID
+ * @param tableId - Airtable table ID
+ * @returns URL to the table in Airtable
+ */
+export function getAirtableTableLink(baseId: string, tableId: string): string {
+  return `https://airtable.com/${baseId}/${tableId}`;
+}
+
+/**
  * Generate an Airtable deep link using entity type mapping.
  * @param entity - Entity type (students, parents, contractors, etc.)
  * @param recordId - Airtable record ID
- * @returns URL to the record, or null if mapping not found
+ * @returns URL to the record (or table if record link unavailable), or null if no mapping found
  */
 export function getAirtableLinkByEntity(entity: string, recordId: string): string | null {
-  const baseId = BASE_MAPPINGS[entity.toLowerCase()];
-  const tableId = TABLE_MAPPINGS[entity.toLowerCase()];
-
-  if (!baseId || !tableId) {
+  if (!entity) {
     return null;
   }
 
-  return getAirtableRecordLink(baseId, tableId, recordId);
+  const entityLower = entity.toLowerCase();
+  
+  // Map singular to plural for entity names
+  // Backend uses singular (student, parent, contractor) but mappings use plural
+  const entityMapping: Record<string, string> = {
+    // Singular forms (from backend)
+    student: "students",
+    parent: "parents",
+    contractor: "contractors",
+    // Plural forms (already correct)
+    students: "students",
+    parents: "parents",
+    contractors: "contractors",
+    // Other entities (same in singular/plural)
+    classes: "classes",
+    class: "classes",
+    attendance: "attendance",
+    truth: "truth",
+    payments: "payments",
+    payment: "payments",
+    data_issues: "data_issues",
+  };
+
+  const mappedEntity = entityMapping[entityLower] || entityLower;
+  let baseId = BASE_MAPPINGS[mappedEntity];
+  let tableId = TABLE_MAPPINGS[mappedEntity];
+
+  // Try direct lookup as fallback if mapped entity didn't work
+  if (!baseId || !tableId) {
+    baseId = BASE_MAPPINGS[entityLower];
+    tableId = TABLE_MAPPINGS[entityLower];
+  }
+
+  // Check if we have valid (non-empty) base and table IDs
+  // Empty strings from env vars mean they're not configured
+  const hasValidBaseId = baseId && baseId.trim().length > 0;
+  const hasValidTableId = tableId && tableId.trim().length > 0;
+
+  if (hasValidBaseId && hasValidTableId) {
+    // If we have a recordId, generate record link; otherwise return table link as fallback
+    if (recordId && recordId.trim().length > 0) {
+      return getAirtableRecordLink(baseId, tableId, recordId);
+    }
+    // Fallback to table link when recordId is missing or invalid
+    return getAirtableTableLink(baseId, tableId);
+  }
+
+  // No valid mapping found - can't generate a link
+  return null;
 }
 
 /**
