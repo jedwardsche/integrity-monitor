@@ -14,16 +14,58 @@ class FirestoreWriter:
 
     def write_run(self, run_id: str, payload: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> None:
         """Write run summary to Firestore.
-        
+
         Args:
             run_id: Unique run identifier
-            payload: Issue counts/summary (from scorer.summarize)
+            payload: Issue counts/summary (from scorer.summarize). If empty dict, counts will not be updated.
             metadata: Additional run metadata (status, timestamps, entity_counts, etc.)
         """
-        data: Dict[str, Any] = {"counts": payload}
+        data: Dict[str, Any] = {}
+        # Only include counts if payload has content (to avoid overwriting existing counts with empty dict)
+        if payload:
+            # Transform flat summary into structured counts for frontend compatibility
+            counts_structured = self._transform_summary_to_counts(payload)
+            data["counts"] = counts_structured
         if metadata:
             data.update(metadata)
         self._client.record_run(run_id, data)
+
+    def _transform_summary_to_counts(self, summary: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform flat scorer summary into structured counts.
+
+        Args:
+            summary: Flat dictionary from scorer.summarize() with keys like "missing_field:info"
+
+        Returns:
+            Structured counts with total, by_type, and by_severity
+        """
+        by_type: Dict[str, int] = {}
+        by_severity: Dict[str, int] = {}
+        total = 0
+
+        for key, count in summary.items():
+            # Skip special aggregate keys
+            if key in ["duplicate_groups_formed"] or key.startswith("attendance:"):
+                continue
+
+            # Parse keys like "missing_field:info" or "missing_link"
+            if ":" in key:
+                issue_type, severity = key.split(":", 1)
+                # Aggregate by type
+                by_type[issue_type] = by_type.get(issue_type, 0) + count
+                # Aggregate by severity
+                by_severity[severity] = by_severity.get(severity, 0) + count
+                # Add to total
+                total += count
+            else:
+                # Keys without severity (like "missing_field") - this is already aggregated by type
+                by_type[key] = count
+
+        return {
+            "total": total,
+            "by_type": by_type,
+            "by_severity": by_severity,
+        }
 
     def write_metrics(self, payload: Dict[str, Any]) -> None:
         """Write daily metrics to Firestore."""

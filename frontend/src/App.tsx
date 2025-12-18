@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, type ReactNode } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useNavigate, useSearchParams } from "react-router-dom";
 import "./App.css";
 import { ProfileMenu } from "./components/ProfileMenu";
 import { ScanConfigModal, type ScanConfig } from "./components/ScanConfigModal";
@@ -8,7 +8,6 @@ import { useRunStatus } from "./hooks/useRunStatus";
 import { useFirestoreRuns } from "./hooks/useFirestoreRuns";
 import { ToastContainer } from "./components/Toast";
 import databaseSearchIcon from "./assets/database_search.svg";
-import scanDocumentIcon from "./assets/scan_document.svg";
 
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined) ||
@@ -21,6 +20,7 @@ interface AppProps {
 export default function App({ children }: AppProps) {
   const { getToken } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: runs, loading: runsLoading } = useFirestoreRuns(1);
 
   // Toast notification state
@@ -45,31 +45,23 @@ export default function App({ children }: AppProps) {
   // Monitor current run status
   const { runStatus } = useRunStatus(currentRunId);
 
-  // Clear current run ID when run completes
-  useEffect(() => {
-    if (runStatus && runStatus.status !== "running" && runStatus.ended_at) {
-      // Run has completed, but keep the ID for a bit so user can still navigate
-      // Clear it after 30 seconds
-      const timer = setTimeout(() => {
-        setCurrentRunId(null);
-        setRunScanLoading(false);
-      }, 30000);
-      return () => clearTimeout(timer);
-    }
-  }, [runStatus]);
 
-  // Update loading state based on run status
+  // Update loading state and clear currentRunId when run completes
   useEffect(() => {
     if (runStatus) {
       if (runStatus.status === "running" || !runStatus.ended_at) {
         setRunScanLoading(true);
       } else {
+        // Run has completed - clear loading state and currentRunId immediately
         setRunScanLoading(false);
+        if (currentRunId === runStatus.id || currentRunId === runStatus.run_id) {
+          setCurrentRunId(null);
+        }
       }
     }
-  }, [runStatus]);
+  }, [runStatus, currentRunId]);
 
-  // Handle run scan button click - opens configuration modal
+  // Handle run scan button click - opens modal directly
   const handleRunScanClick = () => {
     // Check rate limiting
     const now = Date.now();
@@ -83,7 +75,71 @@ export default function App({ children }: AppProps) {
       );
       return;
     }
+    // Open modal directly without navigating
     setScanConfigOpen(true);
+  };
+
+  // Check for openScanModal query param and open modal
+  useEffect(() => {
+    if (searchParams.get("openScanModal") === "true") {
+      setScanConfigOpen(true);
+      // Remove the query param from URL
+      const newSearchParams = new URLSearchParams(searchParams);
+      newSearchParams.delete("openScanModal");
+      setSearchParams(newSearchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  // Wait for Firestore document to be created using real-time listener
+  const waitForRunDocument = async (
+    runId: string,
+    maxWait = 30000
+  ): Promise<void> => {
+    const { doc, onSnapshot } = await import("firebase/firestore");
+    const { db } = await import("./config/firebase");
+    const startTime = Date.now();
+
+    return new Promise((resolve) => {
+      const runRef = doc(db, "integrity_runs", runId);
+      let unsubscribe: (() => void) | null = null;
+      
+      // Set up timeout to resolve after maxWait even if document doesn't appear
+      const timeout = setTimeout(() => {
+        if (unsubscribe) {
+          unsubscribe();
+        }
+        console.log(
+          `[App] Run document not found after ${maxWait}ms, navigating anyway`
+        );
+        resolve();
+      }, maxWait);
+
+      // Use onSnapshot for real-time updates - fires immediately when document is created
+      unsubscribe = onSnapshot(
+        runRef,
+        (snapshot) => {
+          if (snapshot.exists()) {
+            clearTimeout(timeout);
+            if (unsubscribe) {
+              unsubscribe();
+            }
+            console.log(
+              `[App] Run document found after ${Date.now() - startTime}ms`
+            );
+            resolve();
+          }
+        },
+        (error) => {
+          // On error, resolve anyway and let the page handle it
+          clearTimeout(timeout);
+          if (unsubscribe) {
+            unsubscribe();
+          }
+          console.error("[App] Error waiting for run document:", error);
+          resolve();
+        }
+      );
+    });
   };
 
   // Execute scan with configuration
@@ -184,11 +240,10 @@ export default function App({ children }: AppProps) {
       if (runId) {
         setCurrentRunId(runId);
         addToast("Integrity scan started successfully", "success");
-        // Navigate to status page after a short delay to allow document creation
-        setTimeout(() => {
-          console.log("[App] Navigating to run status page:", `/run/${runId}`);
-          navigate(`/run/${runId}`);
-        }, 1000);
+        // Wait for the Firestore document to be created before navigating
+        await waitForRunDocument(runId);
+        console.log("[App] Navigating to run status page:", `/run/${runId}`);
+        navigate(`/run/${runId}`);
       } else {
         console.warn("[App] No run_id in response:", result);
         addToast("Integrity scan started successfully", "success");
@@ -399,24 +454,35 @@ export default function App({ children }: AppProps) {
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
+                    height="16px"
                     viewBox="0 -960 960 960"
+                    width="16px"
                     className="w-4 h-4 flex-shrink-0"
-                    fill="currentColor"
+                    fill="var(--brand)"
                   >
-                    <path d="M240-80q-33 0-56.5-23.5T160-160v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-80H240Zm-80-440v-280q0-33 23.5-56.5T240-880h320l240 240v120h-80v-80H520v-200H240v280h-80ZM40-360v-80h880v80H40Zm440-160Zm0 240Z" />
+                    <path d="M200-800v241-1 400-640 200-200Zm0 720q-33 0-56.5-23.5T120-160v-640q0-33 23.5-56.5T200-880h320l240 240v100q-19-8-39-12.5t-41-6.5v-41H480v-200H200v640h241q16 24 36 44.5T521-80H200Zm460-120q42 0 71-29t29-71q0-42-29-71t-71-29q-42 0-71 29t-29 71q0 42 29 71t71 29ZM864-40 756-148q-21 14-45.5 21t-50.5 7q-75 0-127.5-52.5T480-300q0-75 52.5-127.5T660-480q75 0 127.5 52.5T840-300q0 26-7 50.5T812-204L920-96l-56 56Z" />
                   </svg>
-                  {runScanLoading ? "Starting..." : "Run scan"}
+                  {runScanLoading ? "Starting..." : ""}
                 </button>
               )}
               <NavLink
                 to="/reports"
                 className={({ isActive }) =>
-                  `rounded-full border border-[var(--border)] px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors ${
+                  `rounded-full border border-[var(--border)] px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
                     isActive ? "bg-[var(--bg-mid)]" : ""
                   }`
                 }
               >
-                Reports
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  height="16px"
+                  viewBox="0 -960 960 960"
+                  width="16px"
+                  className="w-4 h-4 flex-shrink-0"
+                  fill="var(--brand)"
+                >
+                  <path d="M280-280h80v-200h-80v200Zm320 0h80v-400h-80v400Zm-160 0h80v-120h-80v120Zm0-200h80v-80h-80v80ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z" />
+                </svg>
               </NavLink>
               <ProfileMenu />
             </div>

@@ -47,6 +47,8 @@ type DerivedMetrics = {
   duplicate_rate: number;
   link_health: number;
   data_completeness: number;
+  attendance_health?: number;
+  base_health?: number;
   total_records: number;
 };
 
@@ -89,11 +91,31 @@ export function useIntegrityMetrics() {
     if (runsHook.data.length > 0) {
       const latestRun = runsHook.data[0];
       const counts = latestRun.counts || {};
+      
+      // Calculate by_severity from by_type_severity if not present
+      let bySeverity = counts.by_severity || {};
+      if (!counts.by_severity && counts.by_type_severity) {
+        bySeverity = { critical: 0, warning: 0, info: 0 };
+        Object.entries(counts.by_type_severity).forEach(([key, value]) => {
+          if (typeof value === 'number' && key.includes(':')) {
+            const severity = key.split(':')[1];
+            if (severity === 'critical' || severity === 'warning' || severity === 'info') {
+              bySeverity[severity] = (bySeverity[severity] || 0) + value;
+            }
+          }
+        });
+      }
+      
+      // Fallback to severityCounts from metrics if still empty
+      if (Object.keys(bySeverity).length === 0) {
+        bySeverity = severityCounts;
+      }
+      
       setSummary({
         summary: {
           total: counts.total || 0,
           by_type: counts.by_type || {},
-          by_severity: counts.by_severity || severityCounts,
+          by_severity: bySeverity,
           by_type_severity: counts.by_type_severity || {},
         },
         last_run: latestRun,
@@ -106,7 +128,7 @@ export function useIntegrityMetrics() {
         summary: {
           total: 0,
           by_type: {},
-          by_severity: {},
+          by_severity: severityCounts,
           by_type_severity: {},
         },
         last_run: null,
@@ -196,22 +218,39 @@ export function useIntegrityMetrics() {
     return () => unsubscribe();
   }, []);
 
-  // Calculate derived metrics
+  // Fetch derived metrics from API
   useEffect(() => {
-    if (summary && !summaryLoading) {
-      const total = summary.summary.total || 0;
-      const bySeverity = summary.summary.by_severity || {};
-      const critical = bySeverity.critical || 0;
-      
-      setDerived({
-        critical_records: critical,
-        duplicate_rate: 0, // Would need total records to calculate
-        link_health: 100, // Would need to calculate from link issues
-        data_completeness: 100, // Would need to calculate from required field issues
-        total_records: 0,
+    const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || window.location.origin;
+    setDerivedLoading(true);
+    
+    fetch(`${API_BASE}/integrity/metrics/derived`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        setDerived(data as DerivedMetrics);
+        setDerivedError(null);
+      })
+      .catch((err) => {
+        setDerivedError(err instanceof Error ? err.message : "Failed to load derived metrics");
+        // Fallback to calculated values if API fails
+        if (summary && !summaryLoading) {
+          const bySeverity = summary.summary.by_severity || {};
+          const critical = bySeverity.critical || 0;
+          setDerived({
+            critical_records: critical,
+            duplicate_rate: 0,
+            link_health: 100,
+            data_completeness: 100,
+            base_health: 100,
+            total_records: 0,
+          });
+        }
+      })
+      .finally(() => {
+        setDerivedLoading(false);
       });
-      setDerivedLoading(false);
-    }
   }, [summary, summaryLoading]);
 
   // Load flagged rules from API

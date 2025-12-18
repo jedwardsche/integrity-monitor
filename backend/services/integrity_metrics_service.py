@@ -286,11 +286,36 @@ class IntegrityMetricsService:
         complete_records = max(0, total_records - missing_field_issues)
         completeness = (complete_records / total_records * 100) if total_records > 0 else 100
         
+        # Attendance health (inverse of attendance issues rate)
+        attendance_issues = (
+            by_type_severity.get("attendance:critical", 0)
+            + by_type_severity.get("attendance:warning", 0)
+            + by_type_severity.get("attendance:info", 0)
+        )
+        # Estimate: assume ~10% of records are students with attendance tracking
+        students_with_attendance = int(total_records * 0.1)
+        attendance_health = (
+            (max(0, students_with_attendance - attendance_issues) / students_with_attendance * 100)
+            if students_with_attendance > 0 else 100
+        )
+        
+        # Overall base health: weighted combination of all metrics
+        # Weights: completeness 30%, link_health 30%, duplicate_health 20%, attendance_health 20%
+        duplicate_health = max(0, 100 - duplicate_rate)  # Convert rate to health score
+        base_health = (
+            completeness * 0.3
+            + link_health * 0.3
+            + duplicate_health * 0.2
+            + attendance_health * 0.2
+        )
+        
         return {
             "critical_records": critical_count,
             "duplicate_rate": round(duplicate_rate, 2),
             "link_health": round(link_health, 2),
             "data_completeness": round(completeness, 2),
+            "attendance_health": round(attendance_health, 2),
+            "base_health": round(base_health, 2),
             "total_records": total_records,
         }
 

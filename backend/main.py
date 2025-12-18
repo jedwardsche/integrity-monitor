@@ -313,7 +313,7 @@ def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event
     try:
         # Create a new runner instance for this thread
         thread_runner = IntegrityRunner()
-        result = thread_runner.run(mode=mode, trigger=trigger, cancel_event=cancel_event, entities=entities)
+        result = thread_runner.run(run_id=run_id, mode=mode, trigger=trigger, cancel_event=cancel_event, entities=entities)
         logger.info(
             "Integrity run completed",
             extra={"run_id": run_id, "status": result.get("status", "success")},

@@ -189,7 +189,7 @@ export function ScanConfigModal({
         aria-hidden="true"
       />
 
-      <div className="relative bg-white border border-[var(--border)] rounded-xl shadow-xl w-full max-w-lg transform transition-all p-6">
+      <div className="relative bg-white border border-[var(--border)] rounded-xl shadow-xl w-full max-w-4xl transform transition-all p-6">
         <h3
           className="text-xl font-semibold text-[var(--text-main)] mb-4"
           style={{ fontFamily: "Outfit" }}
@@ -197,198 +197,206 @@ export function ScanConfigModal({
           Configure Scan
         </h3>
 
-        {/* Mode Selection */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-[var(--text-main)] mb-3">
-            Scan Mode
-          </label>
-          <div className="space-y-2">
-            <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-              <input
-                type="radio"
-                name="mode"
-                value="incremental"
-                checked={mode === "incremental"}
-                onChange={(e) =>
-                  setMode(e.target.value as "incremental" | "full")
-                }
-                className="mr-3"
-              />
-              <div className="flex-1">
-                <div className="font-medium text-[var(--text-main)]">
-                  Incremental Scan
-                </div>
-                <div className="text-sm text-[var(--text-muted)]">
-                  Only scan records modified since the last successful run
-                </div>
-              </div>
-            </label>
-            <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-              <input
-                type="radio"
-                name="mode"
-                value="full"
-                checked={mode === "full"}
-                onChange={(e) =>
-                  setMode(e.target.value as "incremental" | "full")
-                }
-                className="mr-3"
-              />
-              <div className="flex-1">
-                <div className="font-medium text-[var(--text-main)]">
-                  Full Scan
-                </div>
-                <div className="text-sm text-[var(--text-muted)]">
-                  Scan all records regardless of modification time
-                </div>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        {/* Check Types Selection */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-[var(--text-main)] mb-3">
-            Check Types
-          </label>
-          <div className="space-y-2">
-            <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-              <input
-                type="checkbox"
-                checked={checks.duplicates}
-                onChange={() => handleCheckChange("duplicates")}
-                className="mr-3"
-              />
-              <div className="flex-1">
-                <div className="font-medium text-[var(--text-main)]">
-                  Duplicates
-                </div>
-                <div className="text-sm text-[var(--text-muted)]">
-                  Detect duplicate records across entities
-                </div>
-              </div>
-            </label>
-            <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-              <input
-                type="checkbox"
-                checked={checks.links}
-                onChange={() => handleCheckChange("links")}
-                className="mr-3"
-              />
-              <div className="flex-1">
-                <div className="font-medium text-[var(--text-main)]">
-                  Missing Links
-                </div>
-                <div className="text-sm text-[var(--text-muted)]">
-                  Verify required relationships between records
-                </div>
-              </div>
-            </label>
-            <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-              <input
-                type="checkbox"
-                checked={checks.required_fields}
-                onChange={() => handleCheckChange("required_fields")}
-                className="mr-3"
-              />
-              <div className="flex-1">
-                <div className="font-medium text-[var(--text-main)]">
-                  Missing Fields
-                </div>
-                <div className="text-sm text-[var(--text-muted)]">
-                  Check for required field values
-                </div>
-              </div>
-            </label>
-            <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-              <input
-                type="checkbox"
-                checked={checks.attendance}
-                onChange={() => handleCheckChange("attendance")}
-                className="mr-3"
-              />
-              <div className="flex-1">
-                <div className="font-medium text-[var(--text-main)]">
-                  Attendance Anomalies
-                </div>
-                <div className="text-sm text-[var(--text-muted)]">
-                  Detect attendance pattern issues
-                </div>
-              </div>
-            </label>
-          </div>
-          {!hasAtLeastOneCheck && (
-            <p className="mt-2 text-sm text-red-600">
-              Please select at least one check type
-            </p>
-          )}
-        </div>
-
-        {/* Table/Entity Selection */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <label className="block text-sm font-medium text-[var(--text-main)]">
-              Select Tables ({selectedEntities.size} of{" "}
-              {availableEntities.length})
-            </label>
-            {availableEntities.length > 0 && (
-              <button
-                onClick={handleSelectAllEntities}
-                className="text-sm text-[var(--brand)] hover:underline"
-                type="button"
-              >
-                {selectedEntities.size === availableEntities.length
-                  ? "Deselect All"
-                  : "Select All"}
-              </button>
-            )}
-          </div>
-          {schemaLoading ? (
-            <div className="text-sm text-[var(--text-muted)] py-4 text-center">
-              Loading tables...
-            </div>
-          ) : availableEntities.length === 0 ? (
-            <div className="text-sm text-[var(--text-muted)] py-4 text-center">
-              No tables found. Please check your schema configuration.
-            </div>
-          ) : (
-            <div className="max-h-64 overflow-y-auto space-y-2 border border-[var(--border)] rounded-lg p-3">
-              {availableEntities.map((entity) => {
-                const table = entityTableMap.get(entity);
-                return (
-                  <label
-                    key={entity}
-                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-[var(--bg-mid)]/50 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedEntities.has(entity)}
-                      onChange={() => handleEntityToggle(entity)}
-                      className="w-4 h-4"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm text-[var(--text-main)]">
-                        {ENTITY_TABLE_MAPPING[entity] || entity}
-                      </div>
-                      <div className="text-xs text-[var(--text-muted)]">
-                        {entity} • {table?.recordCount ?? 0} records •{" "}
-                        {table?.fieldCount ?? 0} fields
-                      </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Left Column */}
+          <div className="space-y-6">
+            {/* Mode Selection */}
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-main)] mb-3">
+                Scan Mode
+              </label>
+              <div className="space-y-2">
+                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
+                  <input
+                    type="radio"
+                    name="mode"
+                    value="incremental"
+                    checked={mode === "incremental"}
+                    onChange={(e) =>
+                      setMode(e.target.value as "incremental" | "full")
+                    }
+                    className="mr-3"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-[var(--text-main)]">
+                      Incremental Scan
                     </div>
-                  </label>
-                );
-              })}
+                    <div className="text-sm text-[var(--text-muted)]">
+                      Only scan records modified since the last successful run
+                    </div>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
+                  <input
+                    type="radio"
+                    name="mode"
+                    value="full"
+                    checked={mode === "full"}
+                    onChange={(e) =>
+                      setMode(e.target.value as "incremental" | "full")
+                    }
+                    className="mr-3"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-[var(--text-main)]">
+                      Full Scan
+                    </div>
+                    <div className="text-sm text-[var(--text-muted)]">
+                      Scan all records regardless of modification time
+                    </div>
+                  </div>
+                </label>
+              </div>
             </div>
-          )}
-          {!hasAtLeastOneEntity && (
-            <p className="mt-2 text-sm text-red-600">
-              Please select at least one table
-            </p>
-          )}
+
+            {/* Check Types Selection */}
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-main)] mb-3">
+                Check Types
+              </label>
+              <div className="space-y-2">
+                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={checks.duplicates}
+                    onChange={() => handleCheckChange("duplicates")}
+                    className="mr-3"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-[var(--text-main)]">
+                      Duplicates
+                    </div>
+                    <div className="text-sm text-[var(--text-muted)]">
+                      Detect duplicate records across entities
+                    </div>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={checks.links}
+                    onChange={() => handleCheckChange("links")}
+                    className="mr-3"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-[var(--text-main)]">
+                      Missing Links
+                    </div>
+                    <div className="text-sm text-[var(--text-muted)]">
+                      Verify required relationships between records
+                    </div>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={checks.required_fields}
+                    onChange={() => handleCheckChange("required_fields")}
+                    className="mr-3"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-[var(--text-main)]">
+                      Missing Fields
+                    </div>
+                    <div className="text-sm text-[var(--text-muted)]">
+                      Check for required field values
+                    </div>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={checks.attendance}
+                    onChange={() => handleCheckChange("attendance")}
+                    className="mr-3"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-[var(--text-main)]">
+                      Attendance Anomalies
+                    </div>
+                    <div className="text-sm text-[var(--text-muted)]">
+                      Detect attendance pattern issues
+                    </div>
+                  </div>
+                </label>
+              </div>
+              {!hasAtLeastOneCheck && (
+                <p className="mt-2 text-sm text-red-600">
+                  Please select at least one check type
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column */}
+          <div>
+            {/* Table/Entity Selection */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-[var(--text-main)]">
+                  Select Tables ({selectedEntities.size} of{" "}
+                  {availableEntities.length})
+                </label>
+                {availableEntities.length > 0 && (
+                  <button
+                    onClick={handleSelectAllEntities}
+                    className="text-sm text-[var(--brand)] hover:underline"
+                    type="button"
+                  >
+                    {selectedEntities.size === availableEntities.length
+                      ? "Deselect All"
+                      : "Select All"}
+                  </button>
+                )}
+              </div>
+              {schemaLoading ? (
+                <div className="text-sm text-[var(--text-muted)] py-4 text-center">
+                  Loading tables...
+                </div>
+              ) : availableEntities.length === 0 ? (
+                <div className="text-sm text-[var(--text-muted)] py-4 text-center">
+                  No tables found. Please check your schema configuration.
+                </div>
+              ) : (
+                <div className="max-h-64 overflow-y-auto space-y-2 border border-[var(--border)] rounded-lg p-3">
+                  {availableEntities.map((entity) => {
+                    const table = entityTableMap.get(entity);
+                    return (
+                      <label
+                        key={entity}
+                        className="flex items-center gap-3 p-2 rounded-lg hover:bg-[var(--bg-mid)]/50 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedEntities.has(entity)}
+                          onChange={() => handleEntityToggle(entity)}
+                          className="w-4 h-4"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm text-[var(--text-main)]">
+                            {ENTITY_TABLE_MAPPING[entity] || entity}
+                          </div>
+                          <div className="text-xs text-[var(--text-muted)]">
+                            {entity} • {table?.recordCount ?? 0} records •{" "}
+                            {table?.fieldCount ?? 0} fields
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              {!hasAtLeastOneEntity && (
+                <p className="mt-2 text-sm text-red-600">
+                  Please select at least one table
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex justify-end space-x-3">
+        <div className="flex justify-end space-x-3 mt-6">
           <button
             onClick={onCancel}
             className="px-4 py-2 text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] bg-[var(--bg-mid)]/50 hover:bg-[var(--bg-mid)] rounded-lg transition-colors"
