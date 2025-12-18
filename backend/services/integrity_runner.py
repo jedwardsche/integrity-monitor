@@ -116,12 +116,14 @@ class IntegrityRunner:
         except: pass
         # #endregion agent log
 
-    def run(self, mode: str = "incremental", trigger: str = "manual", cancel_event=None, entities: List[str] | None = None) -> Dict[str, Any]:
+    def run(self, run_id: str | None = None, mode: str = "incremental", trigger: str = "manual", cancel_event=None, entities: List[str] | None = None) -> Dict[str, Any]:
         # Explicitly reference module-level time to avoid UnboundLocalError
         # (Python may treat time as local if used in nested scopes)
         import time as _time_module
         import threading
-        run_id = str(uuid.uuid4())
+        # Generate run_id if not provided (for backwards compatibility)
+        if run_id is None:
+            run_id = str(uuid.uuid4())
         start = _time_module.time()
         start_time = datetime.now(timezone.utc)
         metrics: Dict[str, int] = {}
@@ -137,6 +139,9 @@ class IntegrityRunner:
         
         # Store selected entities for use in _fetch_records
         self._selected_entities = entities
+        
+        # Initialize summary to empty dict so it's always available in finally block
+        summary: Dict[str, Any] = {}
         
         # Helper to check cancellation
         def check_cancelled():
@@ -591,6 +596,10 @@ class IntegrityRunner:
                             # Don't fail the run if feedback analysis fails
                     
                     log_write(logger, run_id, "firestore", 1, metrics.get("duration_write_firestore", 0))
+                    
+                    # Determine final status after all operations complete
+                    if status == "running" and not failed_checks and not error_message:
+                        status = "success"
             except Exception as exc:
                 logger.error("Firestore write failed", extra={"run_id": run_id}, exc_info=True)
                 # This is critical - log but don't fail the run
@@ -653,6 +662,11 @@ class IntegrityRunner:
             if hasattr(self, '_current_run_id'):
                 delattr(self, '_current_run_id')
 
+            # Ensure status is not "running" before writing final status
+            # This acts as a safety net in case status wasn't set earlier
+            if status == "running" and not failed_checks and not error_message:
+                status = "success"
+
             # Ensure final status is written
             try:
                 final_metadata = {
@@ -664,7 +678,8 @@ class IntegrityRunner:
                     final_metadata["error_message"] = error_message
                 if failed_checks:
                     final_metadata["failed_checks"] = failed_checks
-                self._firestore_writer.write_run(run_id, summary if "summary" in locals() else {}, final_metadata)
+                # Write summary (will only update counts if summary has content, preserving existing counts if empty)
+                self._firestore_writer.write_run(run_id, summary, final_metadata)
             except Exception:
                 pass  # Already logged above
 

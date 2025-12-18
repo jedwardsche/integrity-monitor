@@ -1,8 +1,11 @@
 import { useNavigate } from "react-router-dom";
 import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
 import { useState } from "react";
-import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
 import { useAuth } from "../hooks/useAuth";
+import {
+  ScanConfigModal,
+  type ScanConfig,
+} from "../components/ScanConfigModal";
 
 export function RunsPage() {
   const navigate = useNavigate();
@@ -10,6 +13,7 @@ export function RunsPage() {
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const { getToken } = useAuth();
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [scanConfigOpen, setScanConfigOpen] = useState(false);
 
   const handleDelete = async (runId: string) => {
     if (
@@ -44,7 +48,8 @@ export function RunsPage() {
       console.error("Failed to delete run:", error);
       let errorMessage = "Unknown error";
       if (error instanceof TypeError && error.message.includes("fetch")) {
-        errorMessage = "Backend server is not available. Please ensure the backend is running.";
+        errorMessage =
+          "Backend server is not available. Please ensure the backend is running.";
       } else if (error instanceof Error) {
         errorMessage = error.message;
       }
@@ -92,6 +97,112 @@ export function RunsPage() {
     return trigger || "Unknown";
   };
 
+  const handleRunScan = () => {
+    setScanConfigOpen(true);
+  };
+
+  const executeScan = async (config: ScanConfig) => {
+    setScanConfigOpen(false);
+    try {
+      const token = await getToken();
+      if (!token) {
+        alert("Authentication required. Please sign in.");
+        return;
+      }
+
+      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+      const params = new URLSearchParams({
+        mode: config.mode,
+        trigger: "manual",
+      });
+
+      // Add entities if specified
+      if (config.entities && config.entities.length > 0) {
+        config.entities.forEach((entity) => {
+          params.append("entities", entity);
+        });
+      }
+
+      const response = await fetch(
+        `${API_BASE}/integrity/run?${params.toString()}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          errorText || `Request failed with status ${response.status}`
+        );
+      }
+
+      const result = await response.json();
+      const runId = result.run_id;
+
+      if (runId) {
+        // Wait for the Firestore document to be created before navigating
+        await waitForRunDocument(runId);
+        navigate(`/run/${runId}`);
+      } else {
+        alert("Scan started but no run ID was returned");
+      }
+    } catch (error) {
+      console.error("Failed to start scan:", error);
+      let errorMessage = "Unknown error";
+      if (error instanceof TypeError && error.message.includes("fetch")) {
+        errorMessage =
+          "Backend server is not available. Please ensure the backend is running.";
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      alert(`Failed to start scan: ${errorMessage}`);
+    }
+  };
+
+  // Wait for Firestore document to be created
+  const waitForRunDocument = async (
+    runId: string,
+    maxWait = 10000
+  ): Promise<void> => {
+    const { doc, getDoc } = await import("firebase/firestore");
+    const { db } = await import("../config/firebase");
+    const checkInterval = 500;
+    const startTime = Date.now();
+
+    return new Promise((resolve) => {
+      const checkDocument = async () => {
+        try {
+          const runRef = doc(db, "integrity_runs", runId);
+          const snapshot = await getDoc(runRef);
+
+          if (snapshot.exists()) {
+            resolve();
+            return;
+          }
+
+          if (Date.now() - startTime >= maxWait) {
+            // Document still doesn't exist after maxWait, but navigate anyway
+            // The useRunStatus hook will handle retrying
+            resolve();
+            return;
+          }
+
+          setTimeout(checkDocument, checkInterval);
+        } catch (error) {
+          // On error, resolve anyway and let the page handle it
+          resolve();
+        }
+      };
+
+      checkDocument();
+    });
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -133,6 +244,22 @@ export function RunsPage() {
             View status and log details for all integrity scans
           </p>
         </div>
+        <button
+          onClick={handleRunScan}
+          className="rounded-lg bg-[var(--brand)] px-4 py-2 text-white font-medium hover:bg-[var(--brand)]/90 transition-colors flex items-center gap-2"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            height="20px"
+            viewBox="0 -960 960 960"
+            width="20px"
+            className="w-5 h-5 flex-shrink-0"
+            fill="currentColor"
+          >
+            <path d="M200-800v241-1 400-640 200-200Zm0 720q-33 0-56.5-23.5T120-160v-640q0-33 23.5-56.5T200-880h320l240 240v100q-19-8-39-12.5t-41-6.5v-41H480v-200H200v640h241q16 24 36 44.5T521-80H200Zm460-120q42 0 71-29t29-71q0-42-29-71t-71-29q-42 0-71 29t-29 71q0 42 29 71t71 29ZM864-40 756-148q-21 14-45.5 21t-50.5 7q-75 0-127.5-52.5T480-300q0-75 52.5-127.5T660-480q75 0 127.5 52.5T840-300q0 26-7 50.5T812-204L920-96l-56 56Z" />
+          </svg>
+          Run Scan
+        </button>
       </div>
 
       {runs.length === 0 ? (
@@ -396,6 +523,13 @@ export function RunsPage() {
           })}
         </div>
       )}
+
+      {/* Scan configuration modal */}
+      <ScanConfigModal
+        isOpen={scanConfigOpen}
+        onConfirm={executeScan}
+        onCancel={() => setScanConfigOpen(false)}
+      />
     </div>
   );
 }

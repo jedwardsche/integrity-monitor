@@ -46,6 +46,7 @@ export function DashboardContent({
     const criticalCount =
       derived.data?.critical_records || bySeverity.critical || 0;
     const lastRun = summary.data?.last_run;
+    const baseHealth = derived.data?.base_health || 100;
 
     let lastRunTime = "Never";
     let lastRunBadge = "No runs yet";
@@ -77,9 +78,9 @@ export function DashboardContent({
     return [
       {
         label: "Data Completeness",
-        value: `${derived.data?.data_completeness?.toFixed(0) || 100}%`,
-        badge: `${derived.data?.link_health?.toFixed(0) || 100}% link health`,
-        context: "Required fields coverage",
+        value: `${baseHealth.toFixed(0)}%`,
+        badge: `${baseHealth.toFixed(0)}% overall health`,
+        context: "Combined metric: fields, links, duplicates, attendance",
       },
       {
         label: "Last run",
@@ -136,13 +137,40 @@ export function DashboardContent({
     }));
   }, [trendData]);
 
-  // Calculate severity breakdown
+  // Calculate severity breakdown - aggregate from by_type_severity if by_severity is missing
   const bySeverity = summary.data?.summary?.by_severity || {};
-  const severityCounts = {
+  const byTypeSeverity = summary.data?.summary?.by_type_severity || {};
+
+  // If by_severity is empty or all zeros, calculate from by_type_severity
+  const hasSeverityData =
+    (bySeverity.critical || 0) +
+      (bySeverity.warning || 0) +
+      (bySeverity.info || 0) >
+    0;
+
+  let severityCounts = {
     critical: bySeverity.critical || 0,
     warning: bySeverity.warning || 0,
     info: bySeverity.info || 0,
   };
+
+  if (!hasSeverityData && Object.keys(byTypeSeverity).length > 0) {
+    // Aggregate from by_type_severity
+    severityCounts = { critical: 0, warning: 0, info: 0 };
+    Object.entries(byTypeSeverity).forEach(([key, value]) => {
+      if (typeof value === "number" && key.includes(":")) {
+        const severity = key.split(":")[1];
+        if (severity === "critical") {
+          severityCounts.critical += value;
+        } else if (severity === "warning") {
+          severityCounts.warning += value;
+        } else if (severity === "info") {
+          severityCounts.info += value;
+        }
+      }
+    });
+  }
+
   const totalSeverity =
     severityCounts.critical + severityCounts.warning + severityCounts.info;
 
