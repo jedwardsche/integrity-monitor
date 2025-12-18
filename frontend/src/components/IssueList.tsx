@@ -228,13 +228,16 @@ export function IssueList({
                             href={airtableLink}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[var(--cta-blue)] hover:underline"
-                            title="Open in Airtable"
+                            className="text-[var(--cta-blue)] hover:underline cursor-pointer"
+                            title={`Open ${issue.record_id} in Airtable (${issue.entity})`}
                           >
                             {issue.record_id}
                           </a>
                         ) : (
-                          <span className="text-[var(--text-muted)]">
+                          <span
+                            className="text-[var(--text-muted)]"
+                            title={`Entity: ${issue.entity} - No Airtable mapping configured`}
+                          >
                             {issue.record_id}
                           </span>
                         )}

@@ -11,8 +11,12 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
-COPY . .
+# Copy backend code into /app/backend/ to maintain package structure
+# This allows imports like "from .config.schema_loader" to work correctly
+COPY . ./backend/
+
+# Set PYTHONPATH so imports work correctly
+ENV PYTHONPATH=/app
 
 # Expose port 8080 (Cloud Run default)
 EXPOSE 8080
