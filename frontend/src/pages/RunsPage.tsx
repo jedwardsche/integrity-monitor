@@ -2,14 +2,11 @@ import { useNavigate } from "react-router-dom";
 import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
-<<<<<<< HEAD
 import {
   ScanConfigModal,
   type ScanConfig,
 } from "../components/ScanConfigModal";
-=======
 import { API_BASE } from "../config/api";
->>>>>>> 4ad60925b7f5edcb6cee9cbf196637d9317d2aec
 
 export function RunsPage() {
   const navigate = useNavigate();
