@@ -28,7 +28,10 @@ export function IssueList({
   const { markResolved, loading: actionLoading } = useIssueActions();
   const { isAdmin } = useAuth();
   const [resolvingId, setResolvingId] = useState<string | null>(null);
-  const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean; issueId: string | null }>({
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    issueId: string | null;
+  }>({
     isOpen: false,
     issueId: null,
   });
@@ -219,8 +222,22 @@ export function IssueList({
                           {issue.severity}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-[var(--cta-blue)]">
-                        {issue.record_id}
+                      <td className="px-4 py-3 font-mono text-xs">
+                        {airtableLink ? (
+                          <a
+                            href={airtableLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[var(--cta-blue)] hover:underline"
+                            title="Open in Airtable"
+                          >
+                            {issue.record_id}
+                          </a>
+                        ) : (
+                          <span className="text-[var(--text-muted)]">
+                            {issue.record_id}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right text-xs text-[var(--text-muted)]">
                         {formatAge(issue.created_at)}
