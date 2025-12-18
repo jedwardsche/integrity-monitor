@@ -36,9 +36,7 @@ const TABLE_ENTITY_MAPPING: Record<string, string> = Object.fromEntries(
   Object.entries(ENTITY_TABLE_MAPPING).map(([entity, table]) => [table, entity])
 );
 
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ||
-  window.location.origin;
+import { API_BASE } from "../config/api";
 
 export function ScanConfigModal({
   isOpen,
