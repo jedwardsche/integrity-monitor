@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useRunStatus } from "../hooks/useRunStatus";
 import { useRunLogs } from "../hooks/useRunLogs";
 import { useAuth } from "../hooks/useAuth";
+import { API_BASE } from "../config/api";
 
 export function RunStatusPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -164,8 +165,6 @@ export function RunStatusPage() {
                 setIsCancelling(true);
                 try {
                   const token = await getToken();
-                  const API_BASE =
-                    import.meta.env.VITE_API_BASE || "http://localhost:8000";
                   const response = await fetch(
                     `${API_BASE}/integrity/run/${runId}/cancel`,
                     {
