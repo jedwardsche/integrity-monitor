@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Optional
 
 from fastapi import Header, HTTPException, status
@@ -22,6 +23,9 @@ def _get_firebase_admin():
         
         # Initialize if not already initialized
         if not firebase_admin._apps:
+            # Get project ID from environment or default to frontend project
+            project_id = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT_ID") or "data-integrity-monitor"
+            
             cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
             if cred_path:
                 if not os.path.isabs(cred_path):
@@ -35,14 +39,17 @@ def _get_firebase_admin():
                     import json
                     with open(cred_path, 'r') as f:
                         sa_data = json.load(f)
-                        project_id = sa_data.get('project_id', 'unknown')
+                        # Use project_id from service account if available, otherwise use env/default
+                        project_id = sa_data.get('project_id') or project_id
                     firebase_admin.initialize_app(cred, {'projectId': project_id})
                 else:
+                    # Service account file not found, use ApplicationDefault but set project ID
                     cred = credentials.ApplicationDefault()
-                    firebase_admin.initialize_app(cred)
+                    firebase_admin.initialize_app(cred, {'projectId': project_id})
             else:
+                # No GOOGLE_APPLICATION_CREDENTIALS, use ApplicationDefault but set project ID
                 cred = credentials.ApplicationDefault()
-                firebase_admin.initialize_app(cred)
+                firebase_admin.initialize_app(cred, {'projectId': project_id})
         
         return admin_auth
     except ImportError:
@@ -77,6 +84,7 @@ def verify_firebase_token(authorization: Optional[str] = Header(None)) -> dict:
         raise AuthenticationError("Missing bearer token")
     
     admin_auth = _get_firebase_admin()
+    
     if not admin_auth:
         raise AuthenticationError("Firebase authentication not configured")
     

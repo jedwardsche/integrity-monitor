@@ -43,7 +43,6 @@ export default function App({ children }: AppProps) {
   // Monitor current run status
   const { runStatus } = useRunStatus(currentRunId);
 
-
   // Update loading state and clear currentRunId when run completes
   useEffect(() => {
     if (runStatus) {
@@ -52,7 +51,10 @@ export default function App({ children }: AppProps) {
       } else {
         // Run has completed - clear loading state and currentRunId immediately
         setRunScanLoading(false);
-        if (currentRunId === runStatus.id || currentRunId === runStatus.run_id) {
+        if (
+          currentRunId === runStatus.id ||
+          currentRunId === runStatus.run_id
+        ) {
           setCurrentRunId(null);
         }
       }
@@ -100,7 +102,7 @@ export default function App({ children }: AppProps) {
     return new Promise((resolve) => {
       const runRef = doc(db, "integrity_runs", runId);
       let unsubscribe: (() => void) | null = null;
-      
+
       // Set up timeout to resolve after maxWait even if document doesn't appear
       const timeout = setTimeout(() => {
         if (unsubscribe) {
@@ -322,8 +324,10 @@ export default function App({ children }: AppProps) {
       displayStatus = "Healthy";
     } else if (statusLower === "success") {
       displayStatus = "Success";
-    } else if (statusLower === "error") {
-      displayStatus = "Error";
+    } else if (statusLower === "critical") {
+      displayStatus = "Critical";
+    } else if (statusLower === "failed" || statusLower === "error") {
+      displayStatus = "Failed";
     } else if (statusLower === "warning") {
       displayStatus = "Warning";
     } else if (statusLower === "running") {
@@ -331,6 +335,8 @@ export default function App({ children }: AppProps) {
     }
 
     const statusColor =
+      statusLower === "critical" ||
+      statusLower === "failed" ||
       statusLower === "error"
         ? "bg-red-500"
         : statusLower === "warning"
@@ -353,9 +359,9 @@ export default function App({ children }: AppProps) {
   return (
     <div className="min-h-screen bg-[var(--bg-warm-light)] text-[var(--text-main)]">
       <header className="border-b border-[var(--border)] bg-[var(--bg-light)]/90">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-4 flex-1">
-            <div className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2 flex-1">
+            <div className="flex items-center gap-2">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--brand)]">
                 <img
                   src={databaseSearchIcon}
@@ -372,7 +378,7 @@ export default function App({ children }: AppProps) {
                 </p>
               </div>
             </div>
-            <nav className="ml-4">
+            <nav className="ml-2">
               <div className="inline-flex rounded-full border border-[var(--border)] bg-white/80 p-1 text-sm">
                 <NavLink
                   to="/"
@@ -399,6 +405,18 @@ export default function App({ children }: AppProps) {
                   Runs
                 </NavLink>
                 <NavLink
+                  to="/issues"
+                  className={({ isActive }) =>
+                    `rounded-full px-4 py-1.5 font-medium transition-colors ${
+                      isActive
+                        ? "bg-[var(--brand)] text-white"
+                        : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                    }`
+                  }
+                >
+                  Issues
+                </NavLink>
+                <NavLink
                   to="/schema"
                   className={({ isActive }) =>
                     `rounded-full px-4 py-1.5 font-medium transition-colors ${
@@ -413,7 +431,7 @@ export default function App({ children }: AppProps) {
               </div>
             </nav>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--text-muted)]">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--text-muted)]">
             {runsLoading ? (
               <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--border)] animate-pulse" />
@@ -435,7 +453,7 @@ export default function App({ children }: AppProps) {
                 No runs yet
               </div>
             )}
-            <div className="flex gap-2 items-center">
+            <div className="flex gap-1.5 items-center">
               {runScanLoading && currentRunId ? (
                 <button
                   onClick={handleRunningClick}
@@ -466,7 +484,7 @@ export default function App({ children }: AppProps) {
               <NavLink
                 to="/reports"
                 className={({ isActive }) =>
-                  `rounded-full border border-[var(--border)] px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
+                  `rounded-full border border-[var(--border)] bg-white px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
                     isActive ? "bg-[var(--bg-mid)]" : ""
                   }`
                 }
@@ -480,6 +498,26 @@ export default function App({ children }: AppProps) {
                   fill="var(--brand)"
                 >
                   <path d="M280-280h80v-200h-80v200Zm320 0h80v-400h-80v400Zm-160 0h80v-120h-80v120Zm0-200h80v-80h-80v80ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z" />
+                </svg>
+              </NavLink>
+              <NavLink
+                to="/scheduling"
+                className={({ isActive }) =>
+                  `rounded-full border border-[var(--border)] bg-white px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
+                    isActive ? "bg-[var(--bg-mid)]" : ""
+                  }`
+                }
+                title="Scheduling"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  height="24px"
+                  viewBox="0 -960 960 960"
+                  width="24px"
+                  className="w-4 h-4 flex-shrink-0"
+                  fill="var(--brand)"
+                >
+                  <path d="M200-640h560v-80H200v80Zm0 0v-80 80Zm0 560q-33 0-56.5-23.5T120-160v-560q0-33 23.5-56.5T200-800h40v-80h80v80h320v-80h80v80h40q33 0 56.5 23.5T840-720v227q-19-9-39-15t-41-9v-43H200v400h252q7 22 16.5 42T491-80H200Zm520 40q-83 0-141.5-58.5T520-240q0-83 58.5-141.5T720-440q83 0 141.5 58.5T920-240q0 83-58.5 141.5T720-40Zm67-105 28-28-75-75v-112h-40v128l87 87Z" />
                 </svg>
               </NavLink>
               <ProfileMenu />

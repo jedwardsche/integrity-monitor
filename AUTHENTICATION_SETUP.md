@@ -69,7 +69,7 @@ Expected success response:
 
 ```json
 {
-  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "token": "[REDACTED - Example JWT token]"
 }
 ```
 

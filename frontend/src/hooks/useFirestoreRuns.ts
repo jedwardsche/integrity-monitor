@@ -50,6 +50,7 @@ export function useFirestoreRuns(limitCount: number = 10) {
               status: (() => {
                 const statusLower = (data.status || "").toLowerCase();
                 if (statusLower === "error") return "Error";
+                if (statusLower === "critical") return "Critical";
                 if (statusLower === "warning") return "Warning";
                 if (statusLower === "running") return "Running";
                 if (statusLower === "cancelled" || statusLower === "canceled") return "Cancelled";

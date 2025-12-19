@@ -35,10 +35,12 @@ const DAYS_OF_WEEK = [
 ];
 
 function computeNextRunAt(
-  frequency: "daily" | "weekly",
+  frequency: "daily" | "weekly" | "hourly" | "custom_times",
   timeOfDay: string,
   timezone: string,
-  daysOfWeek?: number[]
+  daysOfWeek?: number[],
+  intervalMinutes?: number,
+  timesOfDay?: string[]
 ): Timestamp {
   const [hours, minutes] = timeOfDay.split(":").map(Number);
   const now = new Date();
@@ -110,7 +112,105 @@ function computeNextRunAt(
   // Convert to UTC by adding the offset
   let nextRun = new Date(targetTzLocal.getTime() + offset);
 
-  if (frequency === "daily") {
+  if (frequency === "hourly" && intervalMinutes) {
+    // For hourly, calculate next run as now + intervalMinutes (rounded up to next interval)
+    // Get current time in target timezone
+    const currentMinutes = parseInt(nowTz.minute);
+    const currentSeconds = parseInt(nowTz.second);
+    const totalCurrentSeconds = currentMinutes * 60 + currentSeconds;
+
+    // Calculate how many intervals have passed
+    const intervalsPassed = Math.floor(
+      totalCurrentSeconds / (intervalMinutes * 60)
+    );
+
+    // Next interval is (intervalsPassed + 1) * intervalMinutes minutes
+    const nextIntervalMinutes = (intervalsPassed + 1) * intervalMinutes;
+
+    // Create date for next interval in target timezone
+    let nextIntervalLocal: Date;
+    if (nextIntervalMinutes >= 60) {
+      // Next interval is in the next hour
+      const nextHour = parseInt(nowTz.hour) + 1;
+      const minutesInNextHour = nextIntervalMinutes - 60;
+      nextIntervalLocal = new Date(
+        parseInt(nowTz.year),
+        parseInt(nowTz.month) - 1,
+        parseInt(nowTz.day),
+        nextHour,
+        minutesInNextHour,
+        0
+      );
+    } else {
+      // Next interval is in current hour
+      nextIntervalLocal = new Date(
+        parseInt(nowTz.year),
+        parseInt(nowTz.month) - 1,
+        parseInt(nowTz.day),
+        parseInt(nowTz.hour),
+        nextIntervalMinutes,
+        0
+      );
+    }
+
+    // Convert to UTC
+    nextRun = new Date(nextIntervalLocal.getTime() + offset);
+
+    // Safety check: if next run is in the past, add one more interval
+    if (nextRun <= now) {
+      nextRun = new Date(nextRun.getTime() + intervalMinutes * 60 * 1000);
+    }
+  } else if (
+    frequency === "custom_times" &&
+    timesOfDay &&
+    timesOfDay.length > 0
+  ) {
+    // For custom_times, find the next time from the array that hasn't passed today
+    const sortedTimes = [...timesOfDay].sort();
+    const nowInTz = new Date(now.getTime() - offset);
+    const currentTimeStr = `${String(nowInTz.getHours()).padStart(
+      2,
+      "0"
+    )}:${String(nowInTz.getMinutes()).padStart(2, "0")}`;
+
+    // Find next time today
+    let nextTimeStr = sortedTimes.find((time) => time > currentTimeStr);
+
+    if (!nextTimeStr) {
+      // No more times today, use first time tomorrow
+      nextTimeStr = sortedTimes[0];
+      const tomorrowLocal = new Date(
+        parseInt(nowTz.year),
+        parseInt(nowTz.month) - 1,
+        parseInt(nowTz.day) + 1,
+        0,
+        0,
+        0
+      );
+      const [hours, minutes] = nextTimeStr.split(":").map(Number);
+      const targetLocal = new Date(
+        tomorrowLocal.getFullYear(),
+        tomorrowLocal.getMonth(),
+        tomorrowLocal.getDate(),
+        hours,
+        minutes,
+        0
+      );
+      nextRun = new Date(targetLocal.getTime() + offset);
+    } else {
+      // Use next time today
+      const [hours, minutes] = nextTimeStr.split(":").map(Number);
+      const targetLocal = new Date(
+        parseInt(nowTz.year),
+        parseInt(nowTz.month) - 1,
+        parseInt(nowTz.day),
+        hours,
+        minutes,
+        0
+      );
+      nextRun = new Date(targetLocal.getTime() + offset);
+    }
+  } else if (frequency === "daily") {
     // Check if the calculated time has already passed
     if (nextRun <= now) {
       // Time has passed - schedule for tomorrow
@@ -188,11 +288,16 @@ export function SchedulingPage() {
     name: "",
     enabled: true,
     timezone: "America/Denver",
-    frequency: "daily" as "daily" | "weekly",
+    frequency: "daily" as "daily" | "weekly" | "hourly" | "custom_times",
     time_of_day: "14:00",
     days_of_week: [] as number[],
+    interval_minutes: undefined as number | undefined,
+    times_of_day: undefined as string[] | undefined,
     mode: "incremental" as "incremental" | "full",
     entities: [] as string[],
+    stop_condition_type: "none" as "none" | "max_runs" | "stop_at",
+    max_runs: undefined as number | undefined,
+    stop_at: undefined as string | undefined,
   });
 
   const filteredSchedules = useMemo(() => {
@@ -233,6 +338,12 @@ export function SchedulingPage() {
         scheduleForm.timezone,
         scheduleForm.frequency === "weekly"
           ? scheduleForm.days_of_week
+          : undefined,
+        scheduleForm.frequency === "hourly"
+          ? scheduleForm.interval_minutes
+          : undefined,
+        scheduleForm.frequency === "custom_times"
+          ? scheduleForm.times_of_day
           : undefined
       );
 
@@ -249,14 +360,34 @@ export function SchedulingPage() {
         next_run_at: nextRunAt,
       };
 
-      // Only include days_of_week if frequency is weekly
+      // Only include frequency-specific fields based on frequency type
       if (scheduleForm.frequency === "weekly") {
         scheduleData.days_of_week = scheduleForm.days_of_week;
+      } else if (scheduleForm.frequency === "hourly") {
+        scheduleData.interval_minutes = scheduleForm.interval_minutes;
+      } else if (scheduleForm.frequency === "custom_times") {
+        scheduleData.times_of_day = scheduleForm.times_of_day;
       }
 
       // Only include entities if any are selected
       if (scheduleForm.entities.length > 0) {
         scheduleData.run_config.entities = scheduleForm.entities;
+      }
+
+      // Include stop condition fields if set
+      if (
+        scheduleForm.stop_condition_type === "max_runs" &&
+        scheduleForm.max_runs
+      ) {
+        scheduleData.max_runs = scheduleForm.max_runs;
+        scheduleData.run_count = 0; // Initialize run count
+      } else if (
+        scheduleForm.stop_condition_type === "stop_at" &&
+        scheduleForm.stop_at
+      ) {
+        // Convert datetime-local string to Timestamp
+        const stopAtDate = new Date(scheduleForm.stop_at);
+        scheduleData.stop_at = Timestamp.fromDate(stopAtDate);
       }
 
       await createSchedule(scheduleData);
@@ -270,8 +401,13 @@ export function SchedulingPage() {
         frequency: "daily",
         time_of_day: "14:00",
         days_of_week: [],
+        interval_minutes: undefined,
+        times_of_day: undefined,
         mode: "incremental",
         entities: [],
+        stop_condition_type: "none",
+        max_runs: undefined,
+        stop_at: undefined,
       });
     } catch (error) {
       console.error("Failed to create schedule:", error);
@@ -290,6 +426,12 @@ export function SchedulingPage() {
         scheduleForm.timezone,
         scheduleForm.frequency === "weekly"
           ? scheduleForm.days_of_week
+          : undefined,
+        scheduleForm.frequency === "hourly"
+          ? scheduleForm.interval_minutes
+          : undefined,
+        scheduleForm.frequency === "custom_times"
+          ? scheduleForm.times_of_day
           : undefined
       );
 
@@ -305,17 +447,49 @@ export function SchedulingPage() {
         next_run_at: nextRunAt,
       };
 
-      // Only include days_of_week if frequency is weekly
+      // Only include frequency-specific fields based on frequency type
+      // Remove fields that don't apply to the current frequency
       if (scheduleForm.frequency === "weekly") {
         updateData.days_of_week = scheduleForm.days_of_week;
-      } else {
-        // For daily schedules, remove the field if it exists
+        updateData.interval_minutes = deleteField();
+        updateData.times_of_day = deleteField();
+      } else if (scheduleForm.frequency === "hourly") {
+        updateData.interval_minutes = scheduleForm.interval_minutes;
         updateData.days_of_week = deleteField();
+        updateData.times_of_day = deleteField();
+      } else if (scheduleForm.frequency === "custom_times") {
+        updateData.times_of_day = scheduleForm.times_of_day;
+        updateData.days_of_week = deleteField();
+        updateData.interval_minutes = deleteField();
+      } else {
+        // daily frequency
+        updateData.days_of_week = deleteField();
+        updateData.interval_minutes = deleteField();
+        updateData.times_of_day = deleteField();
       }
 
       // Only include entities if any are selected
       if (scheduleForm.entities.length > 0) {
         updateData.run_config.entities = scheduleForm.entities;
+      }
+
+      // Handle stop condition fields
+      if (
+        scheduleForm.stop_condition_type === "max_runs" &&
+        scheduleForm.max_runs
+      ) {
+        updateData.max_runs = scheduleForm.max_runs;
+      } else if (
+        scheduleForm.stop_condition_type === "stop_at" &&
+        scheduleForm.stop_at
+      ) {
+        // Convert datetime-local string to Timestamp
+        const stopAtDate = new Date(scheduleForm.stop_at);
+        updateData.stop_at = Timestamp.fromDate(stopAtDate);
+      } else {
+        // Clear stop condition fields if "none" is selected
+        updateData.stop_at = deleteField();
+        updateData.max_runs = deleteField();
       }
 
       await updateSchedule(scheduleId, updateData);
@@ -329,8 +503,13 @@ export function SchedulingPage() {
         frequency: "daily",
         time_of_day: "14:00",
         days_of_week: [],
+        interval_minutes: undefined,
+        times_of_day: undefined,
         mode: "incremental",
         entities: [],
+        stop_condition_type: "none",
+        max_runs: undefined,
+        stop_at: undefined,
       });
     } catch (error) {
       console.error("Failed to update schedule:", error);
@@ -376,6 +555,27 @@ export function SchedulingPage() {
       schedule.timezone === "America/Los_Angeles"
         ? "America/Denver"
         : schedule.timezone;
+
+    // Determine stop condition type and values
+    let stopConditionType: "none" | "max_runs" | "stop_at" = "none";
+    let maxRuns: number | undefined = undefined;
+    let stopAt: string | undefined = undefined;
+
+    if (schedule.max_runs !== undefined) {
+      stopConditionType = "max_runs";
+      maxRuns = schedule.max_runs;
+    } else if (schedule.stop_at) {
+      stopConditionType = "stop_at";
+      // Convert Timestamp to datetime-local string format
+      const stopAtDate = schedule.stop_at.toDate();
+      const year = stopAtDate.getFullYear();
+      const month = String(stopAtDate.getMonth() + 1).padStart(2, "0");
+      const day = String(stopAtDate.getDate()).padStart(2, "0");
+      const hours = String(stopAtDate.getHours()).padStart(2, "0");
+      const minutes = String(stopAtDate.getMinutes()).padStart(2, "0");
+      stopAt = `${year}-${month}-${day}T${hours}:${minutes}`;
+    }
+
     setScheduleForm({
       group_id: schedule.group_id,
       name: schedule.name,
@@ -384,8 +584,13 @@ export function SchedulingPage() {
       frequency: schedule.frequency,
       time_of_day: schedule.time_of_day,
       days_of_week: schedule.days_of_week || [],
+      interval_minutes: schedule.interval_minutes,
+      times_of_day: schedule.times_of_day,
       mode: schedule.run_config.mode,
       entities: schedule.run_config.entities || [],
+      stop_condition_type: stopConditionType,
+      max_runs: maxRuns,
+      stop_at: stopAt,
     });
     setShowScheduleModal(true);
   };
@@ -501,8 +706,13 @@ export function SchedulingPage() {
                   frequency: "daily",
                   time_of_day: "14:00",
                   days_of_week: [],
+                  interval_minutes: undefined,
+                  times_of_day: undefined,
                   mode: "incremental",
                   entities: [],
+                  stop_condition_type: "none",
+                  max_runs: undefined,
+                  stop_at: undefined,
                 });
                 setShowScheduleModal(true);
               }}
@@ -573,11 +783,17 @@ export function SchedulingPage() {
                       <td className="py-3 px-4 text-sm text-[var(--text-main)]">
                         {schedule.frequency === "daily"
                           ? "Daily"
-                          : schedule.days_of_week
+                          : schedule.frequency === "weekly"
                           ? schedule.days_of_week
-                              .map((d) => DAYS_OF_WEEK[d].label.slice(0, 3))
-                              .join(", ")
-                          : "Weekly"}
+                            ? schedule.days_of_week
+                                .map((d) => DAYS_OF_WEEK[d].label.slice(0, 3))
+                                .join(", ")
+                            : "Weekly"
+                          : schedule.frequency === "hourly"
+                          ? `Every ${schedule.interval_minutes || 60} minutes`
+                          : schedule.frequency === "custom_times"
+                          ? `${schedule.times_of_day?.length || 0} times/day`
+                          : "Unknown"}
                       </td>
                       <td className="py-3 px-4 text-sm text-[var(--text-main)]">
                         {schedule.next_run_at
@@ -770,8 +986,13 @@ export function SchedulingPage() {
               frequency: "daily",
               time_of_day: "14:00",
               days_of_week: [],
+              interval_minutes: undefined,
+              times_of_day: undefined,
               mode: "incremental",
               entities: [],
+              stop_condition_type: "none",
+              max_runs: undefined,
+              stop_at: undefined,
             });
           }}
           isEditing={!!editingSchedule}
@@ -980,11 +1201,16 @@ function CreateScheduleModal({
     name: string;
     enabled: boolean;
     timezone: string;
-    frequency: "daily" | "weekly";
+    frequency: "daily" | "weekly" | "hourly" | "custom_times";
     time_of_day: string;
     days_of_week: number[];
+    interval_minutes?: number;
+    times_of_day?: string[];
     mode: "incremental" | "full";
     entities: string[];
+    stop_condition_type: "none" | "max_runs" | "stop_at";
+    max_runs?: number;
+    stop_at?: string;
   };
   setForm: (form: typeof form) => void;
   onConfirm: () => void;
@@ -1086,43 +1312,60 @@ function CreateScheduleModal({
               <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
                 Frequency
               </label>
-              <div className="space-y-2">
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="radio"
-                    name="frequency"
-                    value="daily"
-                    checked={form.frequency === "daily"}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        frequency: e.target.value as "daily",
-                        days_of_week: [],
-                      })
-                    }
-                    className="mr-3"
-                  />
-                  <span className="text-sm text-[var(--text-main)]">Daily</span>
-                </label>
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="radio"
-                    name="frequency"
-                    value="weekly"
-                    checked={form.frequency === "weekly"}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        frequency: e.target.value as "weekly",
-                      })
-                    }
-                    className="mr-3"
-                  />
-                  <span className="text-sm text-[var(--text-main)]">
-                    Weekly
-                  </span>
-                </label>
-              </div>
+              <select
+                value={form.frequency}
+                onChange={(e) => {
+                  const newFreq = e.target.value as typeof form.frequency;
+
+                  // Get current time in the form's timezone for frequencies that need time_of_day
+                  const getCurrentTime = () => {
+                    const now = new Date();
+                    const parts = new Intl.DateTimeFormat("en-US", {
+                      timeZone: form.timezone,
+                      hour12: false,
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    }).formatToParts(now);
+
+                    const hour =
+                      parts.find((p) => p.type === "hour")?.value || "00";
+                    const minute =
+                      parts.find((p) => p.type === "minute")?.value || "00";
+                    return `${hour}:${minute}`;
+                  };
+
+                  // Auto-set time_of_day for frequencies that use it
+                  const needsTimeOfDay =
+                    newFreq === "daily" ||
+                    newFreq === "weekly" ||
+                    newFreq === "custom_times";
+                  const newTimeOfDay = needsTimeOfDay
+                    ? getCurrentTime()
+                    : form.time_of_day;
+
+                  setForm({
+                    ...form,
+                    frequency: newFreq,
+                    time_of_day: newTimeOfDay,
+                    // Reset frequency-specific fields when changing
+                    days_of_week: newFreq === "weekly" ? form.days_of_week : [],
+                    interval_minutes:
+                      newFreq === "hourly" ? form.interval_minutes : undefined,
+                    times_of_day:
+                      newFreq === "custom_times"
+                        ? form.times_of_day
+                        : undefined,
+                  });
+                }}
+                className="w-full px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="hourly">Hourly (Every X minutes)</option>
+                <option value="custom_times">
+                  Custom Times (Multiple times per day)
+                </option>
+              </select>
             </div>
 
             {form.frequency === "weekly" && (
@@ -1156,20 +1399,100 @@ function CreateScheduleModal({
               </div>
             )}
 
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
-                Time of Day
-              </label>
-              <input
-                type="time"
-                value={form.time_of_day}
-                onChange={(e) =>
-                  setForm({ ...form, time_of_day: e.target.value })
-                }
-                className="w-full px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
-                required
-              />
-            </div>
+            {form.frequency === "hourly" && (
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+                  Interval (minutes)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={form.interval_minutes ?? ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setForm({
+                      ...form,
+                      interval_minutes:
+                        value === "" ? undefined : parseInt(value) || undefined,
+                    });
+                  }}
+                  className="w-full px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
+                  required
+                />
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  Run every X minutes (e.g., 15, 30, 60)
+                </p>
+              </div>
+            )}
+
+            {form.frequency === "custom_times" && (
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+                  Times of Day
+                </label>
+                <div className="space-y-2">
+                  {form.times_of_day?.map((time, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2 p-2 border border-[var(--border)] rounded-lg"
+                    >
+                      <input
+                        type="time"
+                        value={time}
+                        onChange={(e) => {
+                          const newTimes = [...(form.times_of_day || [])];
+                          newTimes[idx] = e.target.value;
+                          setForm({ ...form, times_of_day: newTimes });
+                        }}
+                        className="flex-1 px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newTimes = form.times_of_day?.filter(
+                            (_, i) => i !== idx
+                          );
+                          setForm({ ...form, times_of_day: newTimes || [] });
+                        }}
+                        className="px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForm({
+                        ...form,
+                        times_of_day: [...(form.times_of_day || []), "14:00"],
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-sm font-medium text-[var(--brand)] border border-[var(--brand)] rounded-lg hover:bg-[var(--brand)]/5 transition-colors"
+                  >
+                    Add Time
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {form.frequency === "daily" && (
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+                  Time of Day
+                </label>
+                <input
+                  type="time"
+                  value={form.time_of_day}
+                  onChange={(e) =>
+                    setForm({ ...form, time_of_day: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
+                  required
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
@@ -1187,6 +1510,92 @@ function CreateScheduleModal({
                 ))}
               </select>
             </div>
+
+            {(form.frequency === "hourly" ||
+              form.frequency === "custom_times") && (
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+                  Stop Condition
+                </label>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="stop_condition"
+                      checked={form.stop_condition_type === "none"}
+                      onChange={() =>
+                        setForm({ ...form, stop_condition_type: "none" })
+                      }
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm text-[var(--text-main)]">
+                      No stop condition
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="stop_condition"
+                      checked={form.stop_condition_type === "max_runs"}
+                      onChange={() =>
+                        setForm({ ...form, stop_condition_type: "max_runs" })
+                      }
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm text-[var(--text-main)]">
+                      Stop after X runs
+                    </span>
+                  </label>
+                  {form.stop_condition_type === "max_runs" && (
+                    <div className="ml-6">
+                      <input
+                        type="number"
+                        min="1"
+                        value={form.max_runs ?? ""}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setForm({
+                            ...form,
+                            max_runs:
+                              value === ""
+                                ? undefined
+                                : parseInt(value) || undefined,
+                          });
+                        }}
+                        className="w-full px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
+                        placeholder="Number of runs"
+                      />
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="stop_condition"
+                      checked={form.stop_condition_type === "stop_at"}
+                      onChange={() =>
+                        setForm({ ...form, stop_condition_type: "stop_at" })
+                      }
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm text-[var(--text-main)]">
+                      Stop at time
+                    </span>
+                  </label>
+                  {form.stop_condition_type === "stop_at" && (
+                    <div className="ml-6">
+                      <input
+                        type="datetime-local"
+                        value={form.stop_at ?? ""}
+                        onChange={(e) =>
+                          setForm({ ...form, stop_at: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4">
@@ -1300,7 +1709,11 @@ function CreateScheduleModal({
             disabled={
               !form.group_id ||
               !form.name.trim() ||
-              (form.frequency === "weekly" && form.days_of_week.length === 0)
+              (form.frequency === "weekly" && form.days_of_week.length === 0) ||
+              (form.frequency === "hourly" &&
+                (!form.interval_minutes || form.interval_minutes < 1)) ||
+              (form.frequency === "custom_times" &&
+                (!form.times_of_day || form.times_of_day.length === 0))
             }
             className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors shadow-sm bg-[var(--brand)] hover:bg-[var(--brand)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >

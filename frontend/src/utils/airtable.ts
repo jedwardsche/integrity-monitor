@@ -72,6 +72,143 @@ export function getDataIssuesLink(filters?: Record<string, string>): string {
   return url;
 }
 
+/**
+ * Generate a link to an Airtable table (base/table, without record).
+ * @param baseId - Airtable base ID
+ * @param tableId - Airtable table ID
+ * @returns URL to the table in Airtable
+ */
+function getAirtableTableLink(baseId: string, tableId: string): string {
+  return `https://airtable.com/${baseId}/${tableId}`;
+}
+
+/**
+ * Check if a string is a valid (non-empty) ID.
+ */
+function isValidId(id: string | undefined): boolean {
+  return !!id && id.trim() !== "";
+}
+
+/**
+ * Normalize entity name from singular to plural for consistent mapping lookups.
+ * @param entity - Entity name (can be singular or plural)
+ * @returns Normalized plural entity name
+ */
+function normalizeEntityName(entity: string): string {
+  const normalized = entity.toLowerCase().trim();
+  // Map singular to plural
+  const singularToPlural: Record<string, string> = {
+    student: "students",
+    parent: "parents",
+    contractor: "contractors",
+    class: "classes",
+    classes: "classes", // already plural
+  };
+  return singularToPlural[normalized] || normalized;
+}
+
+/**
+ * Get the shared base ID from any entity mapping.
+ * Since all entities use the same base ID, we can use any available one.
+ * @returns The first available base ID, or empty string if none found
+ */
+function getSharedBaseId(): string {
+  for (const baseId of Object.values(BASE_MAPPINGS)) {
+    if (isValidId(baseId)) {
+      return baseId;
+    }
+  }
+  return "";
+}
+
+/**
+ * Generate Airtable links with fallback.
+ * Returns an object with a primary link, falling back to any available mapping, then a generic Airtable link.
+ * Priority: record link > table link > base link > generic URL
+ * @param entity - Entity type (students, parents, contractors, etc.) - can be singular or plural
+ * @param recordId - Airtable record ID
+ * @returns Object with primary link (always returns a link, never null)
+ */
+export function getAirtableLinksWithFallback(
+  entity: string,
+  recordId: string
+): { primary: string } {
+  // Normalize entity name (singular → plural) for consistent mapping lookups
+  const normalizedEntity = normalizeEntityName(entity);
+  
+  // Get shared base ID (all entities use the same base)
+  const sharedBaseId = getSharedBaseId();
+  
+  // Get entity-specific table ID using normalized entity name
+  const entityTableId = TABLE_MAPPINGS[normalizedEntity];
+
+  // If no record ID, fallback to table link or generic URL
+  if (!recordId || recordId.trim() === "") {
+    if (isValidId(sharedBaseId) && isValidId(entityTableId)) {
+      return { primary: getAirtableTableLink(sharedBaseId, entityTableId) };
+    }
+    // Try any available table as fallback
+    for (const [entityKey, baseId] of Object.entries(BASE_MAPPINGS)) {
+      if (isValidId(baseId)) {
+        const tableId = TABLE_MAPPINGS[entityKey];
+        if (isValidId(tableId)) {
+          return { primary: getAirtableTableLink(baseId, tableId) };
+        }
+      }
+    }
+    return { primary: `https://airtable.com` };
+  }
+
+  // Try entity-specific record link first (using normalized entity name and shared base ID)
+  if (isValidId(sharedBaseId) && isValidId(entityTableId)) {
+    return { primary: getAirtableRecordLink(sharedBaseId, entityTableId, recordId) };
+  }
+
+  // Fallback: try all available mappings systematically for record links
+  // First try preferred fallback entities
+  const fallbackOrder = ["students", "data_issues", "parents", "contractors"];
+  for (const fallbackEntity of fallbackOrder) {
+    const baseId = BASE_MAPPINGS[fallbackEntity];
+    const tableId = TABLE_MAPPINGS[fallbackEntity];
+    if (isValidId(baseId) && isValidId(tableId)) {
+      return { primary: getAirtableRecordLink(baseId, tableId, recordId) };
+    }
+  }
+
+  // If no preferred mappings found, try any available mapping from BASE_MAPPINGS for record link
+  for (const [entityKey, baseId] of Object.entries(BASE_MAPPINGS)) {
+    if (isValidId(baseId)) {
+      const tableId = TABLE_MAPPINGS[entityKey];
+      if (isValidId(tableId)) {
+        return { primary: getAirtableRecordLink(baseId, tableId, recordId) };
+      }
+    }
+  }
+
+  // Fallback to table links: try entity-specific table link
+  if (isValidId(sharedBaseId) && isValidId(entityTableId)) {
+    return { primary: getAirtableTableLink(sharedBaseId, entityTableId) };
+  }
+
+  // Try any available base/table combination for table link
+  for (const [entityKey, baseId] of Object.entries(BASE_MAPPINGS)) {
+    if (isValidId(baseId)) {
+      const tableId = TABLE_MAPPINGS[entityKey];
+      if (isValidId(tableId)) {
+        return { primary: getAirtableTableLink(baseId, tableId) };
+      }
+    }
+  }
+
+  // Last resort: if we have at least a base, link to it
+  if (isValidId(sharedBaseId)) {
+    return { primary: `https://airtable.com/${sharedBaseId}` };
+  }
+
+  // Ultimate fallback: generic Airtable URL
+  return { primary: `https://airtable.com` };
+}
+
 
 export type AirtableField = {
   id: string;
