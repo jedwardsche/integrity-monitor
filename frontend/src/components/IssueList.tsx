@@ -84,11 +84,17 @@ export function IssueList({
   } = useIssueActions();
   const { isAdmin } = useAuth();
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+<<<<<<< HEAD
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     issueId: string | null;
     action: "resolve" | "delete" | null;
+=======
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    issueId: string | null;
+>>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
   }>({
     isOpen: false,
     issueId: null,
@@ -422,6 +428,7 @@ export function IssueList({
                         </span>
                       </td>
                       <td className="px-4 py-3 font-mono text-xs">
+<<<<<<< HEAD
                         <a
                           href={
                             airtableLinks?.primary || `https://airtable.com`
@@ -443,6 +450,26 @@ export function IssueList({
                             }}
                           />
                         </a>
+=======
+                        {airtableLink ? (
+                          <a
+                            href={airtableLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[var(--cta-blue)] hover:underline cursor-pointer"
+                            title={`Open ${issue.record_id} in Airtable (${issue.entity})`}
+                          >
+                            {issue.record_id}
+                          </a>
+                        ) : (
+                          <span
+                            className="text-[var(--text-muted)]"
+                            title={`Entity: ${issue.entity} - No Airtable mapping configured`}
+                          >
+                            {issue.record_id}
+                          </span>
+                        )}
+>>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
                       </td>
                       <td className="px-4 py-3 text-right text-xs text-[var(--text-muted)]">
                         {formatAge(issue.created_at)}

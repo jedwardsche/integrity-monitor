@@ -6,7 +6,10 @@ import {
   ScanConfigModal,
   type ScanConfig,
 } from "../components/ScanConfigModal";
+<<<<<<< HEAD
 import { IssueList } from "../components/IssueList";
+=======
+>>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
 import { API_BASE } from "../config/api";
 
 export function RunsPage() {

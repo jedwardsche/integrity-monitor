@@ -18,6 +18,7 @@ export interface RunHistoryItem {
     total?: number;
     by_type?: Record<string, number>;
     by_severity?: Record<string, number>;
+    by_type_severity?: Record<string, number>;
   };
 }
 
