@@ -21,6 +21,7 @@ export function ReportsPage() {
       case "healthy":
       case "success":
         return "bg-green-100 text-green-800";
+      case "critical":
       case "error":
         return "bg-red-100 text-red-800";
       case "warning":
@@ -28,6 +29,8 @@ export function ReportsPage() {
       case "cancelled":
       case "canceled":
         return "bg-gray-100 text-gray-800";
+      case "running":
+        return "bg-blue-100 text-blue-800";
       default:
         return "bg-blue-100 text-blue-800";
     }

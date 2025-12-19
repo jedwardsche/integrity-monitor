@@ -2,14 +2,12 @@ import { useNavigate } from "react-router-dom";
 import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
-<<<<<<< HEAD
 import {
   ScanConfigModal,
   type ScanConfig,
 } from "../components/ScanConfigModal";
-=======
+import { IssueList } from "../components/IssueList";
 import { API_BASE } from "../config/api";
->>>>>>> 4ad60925b7f5edcb6cee9cbf196637d9317d2aec
 
 export function RunsPage() {
   const navigate = useNavigate();
@@ -67,6 +65,7 @@ export function RunsPage() {
       case "healthy":
       case "success":
         return "bg-green-100 text-green-800 border-green-200";
+      case "critical":
       case "error":
         return "bg-red-100 text-red-800 border-red-200";
       case "warning":
@@ -74,6 +73,8 @@ export function RunsPage() {
       case "cancelled":
       case "canceled":
         return "bg-gray-100 text-gray-800 border-gray-200";
+      case "running":
+        return "bg-blue-100 text-blue-800 border-blue-200";
       default:
         return "bg-blue-100 text-blue-800 border-blue-200";
     }
@@ -288,7 +289,8 @@ export function RunsPage() {
               statusLower !== "success" &&
               statusLower !== "error" &&
               statusLower !== "warning" &&
-              statusLower !== "healthy";
+              statusLower !== "healthy" &&
+              statusLower !== "critical";
 
             return (
               <div
@@ -415,53 +417,80 @@ export function RunsPage() {
 
                 {isExpanded && (
                   <div className="border-t border-[var(--border)] bg-[var(--bg-mid)]/20 p-4 space-y-4">
-                    {/* Status Details */}
-                    <div>
-                      <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
-                        Status Details
-                      </h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                        <div>
-                          <div className="text-[var(--text-muted)] text-xs mb-1">
-                            Started
-                          </div>
-                          <div className="text-[var(--text-main)] font-medium">
-                            {formatTimestamp(run.started_at)}
-                          </div>
-                        </div>
-                        {endTime && (
+                    {/* Status Details and Issues Found - Side by Side */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* Status Details */}
+                      <div>
+                        <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
+                          Status Details
+                        </h3>
+                        <div className="grid grid-cols-2 gap-3 text-sm">
                           <div>
                             <div className="text-[var(--text-muted)] text-xs mb-1">
-                              Ended
+                              Started
                             </div>
                             <div className="text-[var(--text-main)] font-medium">
-                              {formatTimestamp(run.ended_at)}
+                              {formatTimestamp(run.started_at)}
                             </div>
                           </div>
-                        )}
-                        <div>
-                          <div className="text-[var(--text-muted)] text-xs mb-1">
-                            Duration
+                          {endTime && (
+                            <div>
+                              <div className="text-[var(--text-muted)] text-xs mb-1">
+                                Ended
+                              </div>
+                              <div className="text-[var(--text-main)] font-medium">
+                                {formatTimestamp(run.ended_at)}
+                              </div>
+                            </div>
+                          )}
+                          <div>
+                            <div className="text-[var(--text-muted)] text-xs mb-1">
+                              Duration
+                            </div>
+                            <div className="text-[var(--text-main)] font-medium">
+                              {run.duration_ms
+                                ? `${Math.floor(
+                                    run.duration_ms / 60000
+                                  )}m ${Math.floor(
+                                    (run.duration_ms % 60000) / 1000
+                                  )}s`
+                                : run.duration}
+                            </div>
                           </div>
-                          <div className="text-[var(--text-main)] font-medium">
-                            {run.duration_ms
-                              ? `${Math.floor(
-                                  run.duration_ms / 60000
-                                )}m ${Math.floor(
-                                  (run.duration_ms % 60000) / 1000
-                                )}s`
-                              : run.duration}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[var(--text-muted)] text-xs mb-1">
-                            Run ID
-                          </div>
-                          <div className="text-[var(--text-main)] font-mono text-xs">
-                            {run.run_id || run.id}
+                          <div>
+                            <div className="text-[var(--text-muted)] text-xs mb-1">
+                              Run ID
+                            </div>
+                            <div className="text-[var(--text-main)] font-mono text-xs">
+                              {run.run_id || run.id}
+                            </div>
                           </div>
                         </div>
                       </div>
+
+                      {/* Issues Found */}
+                      {!isRunning &&
+                        statusLower !== "cancelled" &&
+                        statusLower !== "canceled" && (
+                          <div>
+                            <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
+                              Issues Found
+                              {run.counts?.total !== undefined && (
+                                <span className="ml-2 text-[var(--text-muted)] font-normal">
+                                  ({run.counts.total.toLocaleString()})
+                                </span>
+                              )}
+                            </h3>
+                            <div className="bg-white rounded-lg border border-[var(--border)] max-h-[400px] overflow-y-auto">
+                              <IssueList
+                                filters={{
+                                  run_id: run.run_id || run.id,
+                                  status: "open",
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
                     </div>
 
                     {/* Log Details */}
@@ -494,6 +523,12 @@ export function RunsPage() {
                             <div className="text-red-600">
                               <span className="text-red-600">[ERROR]</span> Run
                               failed
+                            </div>
+                          )}
+                          {run.status === "critical" && (
+                            <div className="text-red-600">
+                              <span className="text-red-600">[CRITICAL]</span>{" "}
+                              Critical issues found
                             </div>
                           )}
                           {run.status === "warning" && (

@@ -88,5 +88,50 @@ Last updated: 2025-01-27 (Automation, QA, and KPI Measurement Complete)
 | 2025-01-27 | KPI endpoints & dashboard          | Added `GET /integrity/metrics/kpi` endpoint returning latest KPI, 8-week trend, and alerts. Added `POST /integrity/kpi/sample` endpoint for scheduler to trigger weekly sampling. Updated `frontend/src/hooks/useIntegrityMetrics.ts` to fetch KPI data. Added KPI measurement card to `frontend/src/App.tsx` showing percentage, trend chart, target status, and alerts.                                                                                                                                                                                                                     |
 | 2025-01-27 | KPI scheduler job                  | Added weekly KPI sampling job to `deploy/create-scheduler.sh` – runs Sunday 04:00 AM (after weekly full scan at 03:00 AM). Job calls `/integrity/kpi/sample` endpoint.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 2025-01-27 | Runbook documentation              | Updated `docs/runbook.md` with QA process (pre-release checklist, test structure, golden file updates), KPI measurement workflow (weekly sampling, manual calculation, review process), and rule tuning via Firestore (threshold adjustments, flagged rules review, best practices).                                                                                                                                                                                                                                                                                                          |
+| 2025-01-XX | CORS and 500 error fixes           | Fixed CORS policy errors and 500 Internal Server Error on `/airtable/schema` endpoint. See Troubleshooting section below for details.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Update this table as prompts are completed or additional context emerges.
+
+## Troubleshooting & Fixes
+
+### CORS Policy and 500 Internal Server Error (2025-01-XX)
+
+**Issue:**
+
+- Browser console showed: `Access to fetch at 'http://localhost:8000/airtable/schema' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource`
+- Backend returned `500 (Internal Server Error)` when accessing `/airtable/schema` endpoint
+- Schema page failed to load and schema.json download failed
+
+**What We Tried (That Didn't Work):**
+
+1. **Initial CORS configuration changes** - Modified `backend/main.py` to parse `ALLOWED_ORIGINS` environment variable and set default localhost origins. This didn't fix the issue because the 500 error was preventing CORS headers from being added.
+2. **Frontend token refresh** - Attempted to use `user.getIdToken(true)` to force fresh token retrieval, but this wasn't the root cause.
+3. **Backend logging instrumentation** - Added extensive NDJSON logging to track request flow, but this revealed the actual error.
+
+**Root Cause:**
+The 500 error was caused by an `UnboundLocalError` in `backend/middleware/auth.py` at line 138. The function `verify_firebase_token` had a local `import time` statement inside an exception handler (line 202), which made Python treat `time` as a local variable throughout the entire function scope. When the code tried to use `time.time()` earlier in the function (line 138), Python raised `UnboundLocalError: cannot access local variable 'time' where it is not associated with a value` because it expected `time` to be assigned locally later in the function.
+
+**What Worked:**
+
+1. **Removed conflicting local import** - Removed the redundant `import time` statement from the exception handler in `verify_firebase_token()` since `time` was already imported at the module level (line 7 of `auth.py`).
+2. **Added global exception handler** - Added a global exception handler in `backend/main.py` that ensures CORS headers are always present on error responses, preventing CORS errors even when exceptions occur:
+   ```python
+   @app.exception_handler(Exception)
+   async def global_exception_handler(request: Request, exc: Exception):
+       """Global exception handler that ensures CORS headers are always present."""
+       # Creates JSONResponse with proper CORS headers even on errors
+   ```
+3. **Improved CORS configuration** - Enhanced CORS middleware setup to properly handle localhost origins and credentials:
+   ```python
+   allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+   use_credentials = "*" not in allowed_origins
+   ```
+
+**Files Modified:**
+
+- `backend/middleware/auth.py` - Removed redundant `import time` from exception handler
+- `backend/main.py` - Added global exception handler for CORS headers, improved CORS configuration
+- All debug instrumentation removed after verification
+
+**Key Lesson:**
+When Python sees an assignment or import to a variable name anywhere in a function, it treats that variable as local throughout the entire function scope. This can cause `UnboundLocalError` if you try to use the variable before the assignment. Always use module-level imports and avoid local imports that shadow module-level names.

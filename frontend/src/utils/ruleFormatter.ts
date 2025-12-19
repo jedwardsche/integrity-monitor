@@ -21,8 +21,8 @@ export function formatRuleId(ruleId: string): string {
         name_campus: "name and campus",
         parent_overlap: "parent overlap",
         truth_id: "Truth ID",
-        email: "email",
-        phone: "phone",
+        email: "email address",
+        phone: "phone number",
         name_exact: "exact name match",
         name_first_similar: "first name exact, last name similar",
         name_last_similar: "last name exact, first name similar",
@@ -86,12 +86,26 @@ export function formatRuleId(ruleId: string): string {
     const parts = ruleId.split(".");
     if (parts.length >= 2) {
       const metric = parts[1];
-      const metricName = metric.replace(/_/g, " ");
+      
+      // Map common attendance metrics to human-readable names
+      const metricMap: Record<string, string> = {
+        excessive_absences: "excessive absences",
+        high_absence_rate: "high absence rate",
+        consecutive_absences: "consecutive absences",
+        absence_threshold: "absence threshold exceeded",
+      };
+      
+      const metricName = metricMap[metric] || metric.replace(/_/g, " ");
 
       return `Attendance: ${metricName}`;
     }
   }
 
   // Default: return as-is or format with underscores replaced
-  return ruleId.replace(/_/g, " ").replace(/\./g, ": ");
+  // Capitalize first letter of each word for better readability
+  const formatted = ruleId.replace(/_/g, " ").replace(/\./g, ": ");
+  return formatted
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }

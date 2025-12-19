@@ -25,13 +25,18 @@ export interface Schedule {
   name: string;
   enabled: boolean;
   timezone: string;
-  frequency: "daily" | "weekly";
+  frequency: "daily" | "weekly" | "hourly" | "custom_times";
   time_of_day: string;
   days_of_week?: number[];
+  interval_minutes?: number; // for hourly frequency
+  times_of_day?: string[]; // for custom_times frequency
   run_config: ScheduleRunConfig;
   next_run_at: Timestamp;
   last_run_at?: Timestamp;
   last_run_id?: string;
+  stop_at?: Timestamp; // Stop scheduling after this time
+  max_runs?: number; // Stop after this many runs
+  run_count?: number; // Track number of runs
   lock?: {
     locked_at: Timestamp;
     locked_by: string;
@@ -94,11 +99,16 @@ export function useFirestoreSchedules(groupId?: string) {
     name: string;
     enabled: boolean;
     timezone: string;
-    frequency: "daily" | "weekly";
+    frequency: "daily" | "weekly" | "hourly" | "custom_times";
     time_of_day: string;
     days_of_week?: number[];
+    interval_minutes?: number;
+    times_of_day?: string[];
     run_config: ScheduleRunConfig;
     next_run_at: Timestamp;
+    stop_at?: Timestamp;
+    max_runs?: number;
+    run_count?: number;
   }) => {
     if (!user) throw new Error("User not authenticated");
 
@@ -126,8 +136,13 @@ export function useFirestoreSchedules(groupId?: string) {
         | "frequency"
         | "time_of_day"
         | "days_of_week"
+        | "interval_minutes"
+        | "times_of_day"
         | "run_config"
         | "next_run_at"
+        | "stop_at"
+        | "max_runs"
+        | "run_count"
       >
     >
   ) => {

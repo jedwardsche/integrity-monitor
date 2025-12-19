@@ -47,7 +47,7 @@
 
 ```bash
 # Delete the compromised key
-gcloud iam service-accounts keys delete 9bfdc39d072252547d9544e5bf23cbeba7932f62 \
+gcloud iam service-accounts keys delete [KEY_ID] \
   --iam-account=firebase-adminsdk-fbsvc@data-integrity-monitor.iam.gserviceaccount.com
 
 # Create new key for local dev (DO NOT COMMIT)
@@ -58,7 +58,7 @@ gcloud iam service-accounts keys create new-sa-key.json \
 **Airtable PAT:**
 
 1. Go to https://airtable.com/create/tokens
-2. Revoke old token: `patYDSQtwZjOS9zKv...`
+2. Revoke old token: `[REDACTED - Token has been rotated]`
 3. Create new PAT with scopes: `data.records:read`, `data.records:write`, `schema.bases:read`
 
 **API_AUTH_TOKEN:**

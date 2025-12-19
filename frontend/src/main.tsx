@@ -11,6 +11,9 @@ import { SchemaPage } from "./pages/SchemaPage";
 import { RunStatusPage } from "./pages/RunStatusPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { RunsPage } from "./pages/RunsPage";
+import { IssueDetailPage } from "./pages/IssueDetailPage";
+import { IssuesPage } from "./pages/IssuesPage";
+import { SchedulingPage } from "./pages/SchedulingPage";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -64,6 +67,36 @@ createRoot(document.getElementById("root")!).render(
               <AuthGuard>
                 <App>
                   <ReportsPage />
+                </App>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/issues"
+            element={
+              <AuthGuard>
+                <App>
+                  <IssuesPage />
+                </App>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/issue/:issueId"
+            element={
+              <AuthGuard>
+                <App>
+                  <IssueDetailPage />
+                </App>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/scheduling"
+            element={
+              <AuthGuard>
+                <App>
+                  <SchedulingPage />
                 </App>
               </AuthGuard>
             }

@@ -1,14 +1,21 @@
 const {initializeApp} = require("firebase-admin/app");
 const {getAuth} = require("firebase-admin/auth");
-const {getFirestore} = require("firebase-admin/firestore");
+const {getFirestore, Timestamp} = require("firebase-admin/firestore");
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
+const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {setGlobalOptions} = require("firebase-functions");
+const {defineSecret} = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
+const {DateTime} = require("luxon");
 
 initializeApp();
 const db = getFirestore();
 
 setGlobalOptions({ maxInstances: 10 });
+
+// Define secrets from Firebase Secret Manager
+const apiAuthToken = defineSecret("API_AUTH_TOKEN");
+const integrityRunnerUrl = defineSecret("INTEGRITY_RUNNER_URL");
 
 /**
  * Grant admin access to a user by email address.
@@ -48,3 +55,395 @@ exports.grantAdminAccess = onCall(async (request) => {
     throw new HttpsError("internal", `Failed to grant admin access: ${error.message}`);
   }
 });
+
+/**
+ * Scheduled function that runs every minute to check for due schedules
+ * and trigger integrity runs.
+ */
+exports.runScheduledScans = onSchedule(
+  {
+    schedule: "every 1 minutes",
+    timeZone: "UTC",
+    memory: "256MiB",
+    timeoutSeconds: 540,
+    secrets: [apiAuthToken, integrityRunnerUrl], // Access secrets from Secret Manager
+  },
+  async (event) => {
+    // Get secrets from Secret Manager
+    const INTEGRITY_RUNNER_URL = integrityRunnerUrl.value();
+    const API_AUTH_TOKEN = apiAuthToken.value();
+
+    if (!INTEGRITY_RUNNER_URL) {
+      logger.error("INTEGRITY_RUNNER_URL secret not available from Secret Manager. Set it using: firebase functions:secrets:set INTEGRITY_RUNNER_URL");
+      return;
+    }
+
+    if (!API_AUTH_TOKEN) {
+      logger.error("API_AUTH_TOKEN secret not available from Secret Manager. Set it using: firebase functions:secrets:set API_AUTH_TOKEN");
+      return;
+    }
+
+    const now = Timestamp.now();
+    logger.info("Checking for due schedules", { timestamp: now.toDate().toISOString() });
+
+    try {
+      // Query for due schedules
+      const schedulesRef = db.collection("schedules");
+      const dueSchedulesQuery = schedulesRef
+        .where("enabled", "==", true)
+        .where("next_run_at", "<=", now)
+        .orderBy("next_run_at")
+        .limit(10);
+
+      const snapshot = await dueSchedulesQuery.get();
+
+      if (snapshot.empty) {
+        logger.info("No due schedules found");
+        return;
+      }
+
+      logger.info(`Found ${snapshot.size} due schedule(s)`);
+
+      // Process each schedule
+      for (const scheduleDoc of snapshot.docs) {
+        const scheduleId = scheduleDoc.id;
+        const schedule = scheduleDoc.data();
+
+        try {
+          // Create execution ID before transaction
+          const executionId = db.collection("schedule_executions").doc().id;
+          let executionCreated = false;
+          let nextRunTimestamp = null;
+          let scheduledFor = null;
+          let runConfig = null;
+
+          // Claim the schedule in a transaction
+          await db.runTransaction(async (transaction) => {
+            const scheduleRef = db.collection("schedules").doc(scheduleId);
+            const currentSchedule = await transaction.get(scheduleRef);
+
+            if (!currentSchedule.exists) {
+              logger.warn(`Schedule ${scheduleId} no longer exists`);
+              return;
+            }
+
+            const currentData = currentSchedule.data();
+
+            // Re-check conditions
+            if (!currentData.enabled) {
+              logger.info(`Schedule ${scheduleId} is disabled, skipping`);
+              return;
+            }
+
+            const nextRunAt = currentData.next_run_at;
+            if (!nextRunAt || nextRunAt.toMillis() > now.toMillis()) {
+              logger.info(`Schedule ${scheduleId} is not due yet`);
+              return;
+            }
+
+            // Check if locked recently (within last 5 minutes)
+            if (currentData.lock && currentData.lock.locked_at) {
+              const lockTime = currentData.lock.locked_at.toMillis();
+              const fiveMinutesAgo = now.toMillis() - 5 * 60 * 1000;
+              if (lockTime > fiveMinutesAgo) {
+                logger.warn(`Schedule ${scheduleId} is locked, skipping`);
+                return;
+              }
+            }
+
+            // Check stop conditions
+            const runCount = currentData.run_count || 0;
+            const maxRuns = currentData.max_runs;
+            const stopAt = currentData.stop_at;
+
+            // Check if max_runs condition is met
+            if (maxRuns !== undefined && runCount >= maxRuns) {
+              logger.info(`Schedule ${scheduleId} has reached max_runs (${runCount}/${maxRuns}), disabling`);
+              transaction.update(scheduleRef, {
+                enabled: false,
+                lock: null,
+              });
+              return;
+            }
+
+            // Check if stop_at condition is met
+            if (stopAt && stopAt.toMillis() <= now.toMillis()) {
+              logger.info(`Schedule ${scheduleId} has reached stop_at time, disabling`);
+              transaction.update(scheduleRef, {
+                enabled: false,
+                lock: null,
+              });
+              return;
+            }
+
+            // Claim the schedule
+            transaction.update(scheduleRef, {
+              lock: {
+                locked_at: now,
+                locked_by: "scheduler",
+              },
+            });
+
+            // Compute next run time (pass previous next_run_at for interval-based frequencies)
+            nextRunTimestamp = computeNextRunAt(
+              currentData.frequency,
+              currentData.time_of_day,
+              currentData.timezone,
+              currentData.days_of_week,
+              currentData.interval_minutes,
+              currentData.times_of_day,
+              nextRunAt // Pass previous next_run_at for incrementing intervals
+            );
+
+            // Store values for use outside transaction
+            scheduledFor = nextRunAt;
+            runConfig = currentData.run_config;
+
+            // Create execution record
+            const executionRef = db.collection("schedule_executions").doc(executionId);
+            transaction.set(executionRef, {
+              schedule_id: scheduleId,
+              group_id: currentData.group_id,
+              scheduled_for: nextRunAt,
+              started_at: now,
+              status: "started",
+              run_config: currentData.run_config,
+            });
+
+            // Increment run_count and update schedule with next run time
+            const newRunCount = (currentData.run_count || 0) + 1;
+            const updateData = {
+              next_run_at: nextRunTimestamp,
+              run_count: newRunCount,
+            };
+
+            // Check if we've reached max_runs after incrementing
+            if (maxRuns !== undefined && newRunCount >= maxRuns) {
+              updateData.enabled = false;
+              logger.info(`Schedule ${scheduleId} will reach max_runs after this run, will disable`);
+            }
+
+            transaction.update(scheduleRef, updateData);
+
+            executionCreated = true;
+          });
+
+          if (!executionCreated) {
+            continue; // Schedule was not claimed, skip to next
+          }
+
+          logger.info(`Claimed schedule ${scheduleId}`, {
+            nextRunAt: nextRunTimestamp.toDate().toISOString(),
+            executionId: executionId,
+          });
+
+          // Trigger the backend run
+          const mode = runConfig.mode || "incremental";
+          const entities = runConfig.entities || [];
+
+          const params = new URLSearchParams({
+            mode: mode,
+            trigger: "schedule",
+          });
+
+          if (entities.length > 0) {
+            entities.forEach((entity) => {
+              params.append("entities", entity);
+            });
+          }
+
+          const url = `${INTEGRITY_RUNNER_URL}/integrity/run?${params.toString()}`;
+          logger.info(`Triggering run for schedule ${scheduleId}`, { url, mode, entities });
+
+          let runId = null;
+          try {
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${API_AUTH_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+            });
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(`Backend returned ${response.status}: ${errorText}`);
+            }
+
+            const result = await response.json();
+            runId = result.run_id;
+
+            logger.info(`Run triggered successfully for schedule ${scheduleId}`, {
+              runId,
+            });
+
+            // Update schedule and execution with run ID
+            const executionRef = db
+              .collection("schedule_executions")
+              .doc(executionId);
+            const scheduleRef = db.collection("schedules").doc(scheduleId);
+
+            await db.runTransaction(async (transaction) => {
+              transaction.update(scheduleRef, {
+                last_run_at: now,
+                last_run_id: runId,
+                lock: null, // Clear lock on success
+              });
+
+              transaction.update(executionRef, {
+                run_id: runId,
+                status: "started",
+              });
+            });
+          } catch (error) {
+            logger.error(`Failed to trigger run for schedule ${scheduleId}`, {
+              error: error.message,
+              stack: error.stack,
+            });
+
+            // Update execution with error
+            const executionRef = db
+              .collection("schedule_executions")
+              .doc(executionId);
+            const scheduleRef = db.collection("schedules").doc(scheduleId);
+
+            await db.runTransaction(async (transaction) => {
+              transaction.update(executionRef, {
+                status: "error",
+                error: {
+                  message: error.message,
+                  code: error.code || "UNKNOWN",
+                },
+              });
+
+              // Clear lock on error (allow retry on next cycle)
+              transaction.update(scheduleRef, {
+                lock: null,
+              });
+            });
+          }
+        } catch (error) {
+          logger.error(`Error processing schedule ${scheduleId}`, {
+            error: error.message,
+            stack: error.stack,
+          });
+        }
+      }
+    } catch (error) {
+      logger.error("Error in scheduled scan runner", {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  }
+);
+
+/**
+ * Compute the next run timestamp based on schedule configuration.
+ * @param {string} frequency - Schedule frequency (daily, weekly, hourly, custom_times)
+ * @param {string} timeOfDay - Time of day in HH:mm format
+ * @param {string} timezone - Timezone string
+ * @param {number[]} daysOfWeek - Days of week (0-6) for weekly frequency
+ * @param {number} intervalMinutes - Interval in minutes for hourly frequency
+ * @param {string[]} timesOfDay - Array of times for custom_times frequency
+ * @param {Timestamp} previousNextRunAt - Previous next_run_at timestamp (for incrementing intervals)
+ */
+function computeNextRunAt(frequency, timeOfDay, timezone, daysOfWeek, intervalMinutes, timesOfDay, previousNextRunAt) {
+  // If previousNextRunAt is provided, use it as the base time (for incrementing)
+  // Otherwise, use current time (for initial calculation)
+  const tz = previousNextRunAt 
+    ? DateTime.fromJSDate(previousNextRunAt.toDate()).setZone(timezone)
+    : DateTime.now().setZone(timezone);
+  let nextRun;
+
+  if (frequency === "hourly" && intervalMinutes) {
+    if (previousNextRunAt) {
+      // For subsequent runs, increment from previous time
+      nextRun = tz.plus({ minutes: intervalMinutes });
+    } else {
+      // For initial calculation, calculate next run as now + intervalMinutes (rounded up to next interval)
+      const currentMinutes = tz.minute;
+      const currentSeconds = tz.second;
+      const totalCurrentSeconds = currentMinutes * 60 + currentSeconds;
+      
+      // Calculate how many intervals have passed
+      const intervalsPassed = Math.floor(totalCurrentSeconds / (intervalMinutes * 60));
+      
+      // Next interval is (intervalsPassed + 1) * intervalMinutes minutes
+      const nextIntervalMinutes = (intervalsPassed + 1) * intervalMinutes;
+      
+      if (nextIntervalMinutes >= 60) {
+        // Next interval is in the next hour
+        nextRun = tz
+          .plus({ hours: 1 })
+          .set({ minute: nextIntervalMinutes - 60, second: 0, millisecond: 0 });
+      } else {
+        // Next interval is in current hour
+        nextRun = tz.set({ minute: nextIntervalMinutes, second: 0, millisecond: 0 });
+      }
+      
+      // Safety check: if next run is in the past, add one more interval
+      if (nextRun <= tz) {
+        nextRun = nextRun.plus({ minutes: intervalMinutes });
+      }
+    }
+  } else if (frequency === "custom_times" && timesOfDay && timesOfDay.length > 0) {
+    // For custom_times, find the next time from the array that hasn't passed today
+    const sortedTimes = [...timesOfDay].sort();
+    const currentTimeStr = `${String(tz.hour).padStart(2, "0")}:${String(tz.minute).padStart(2, "0")}`;
+    
+    // Find next time today
+    let nextTimeStr = sortedTimes.find((time) => time > currentTimeStr);
+    
+    if (!nextTimeStr) {
+      // No more times today, use first time tomorrow
+      nextTimeStr = sortedTimes[0];
+      const [hours, minutes] = nextTimeStr.split(":").map(Number);
+      nextRun = tz
+        .plus({ days: 1 })
+        .set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
+    } else {
+      // Use next time today
+      const [hours, minutes] = nextTimeStr.split(":").map(Number);
+      nextRun = tz.set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
+    }
+  } else {
+    // For daily and weekly, use existing logic
+    const [hours, minutes] = timeOfDay.split(":").map(Number);
+    nextRun = tz.set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
+
+    if (frequency === "daily") {
+      // If the time has already passed today, schedule for tomorrow
+      if (nextRun <= tz) {
+        nextRun = nextRun.plus({ days: 1 });
+      }
+    } else if (frequency === "weekly" && daysOfWeek && daysOfWeek.length > 0) {
+      // Find the next occurrence of one of the specified days
+      const sortedDays = [...daysOfWeek].sort((a, b) => a - b);
+      const currentDay = tz.weekday === 7 ? 0 : tz.weekday; // Luxon uses 1-7, we use 0-6
+
+      // Find next day in the week
+      let nextDay = sortedDays.find((d) => d > currentDay);
+
+      if (!nextDay) {
+        // Next occurrence is next week
+        nextDay = sortedDays[0];
+        const daysUntilNext = 7 - currentDay + nextDay;
+        nextRun = nextRun.plus({ days: daysUntilNext });
+      } else {
+        // Next occurrence is this week
+        const daysUntilNext = nextDay - currentDay;
+        nextRun = nextRun.plus({ days: daysUntilNext });
+      }
+
+      // If we've already passed the time today and today is one of the scheduled days
+      if (nextRun <= tz && sortedDays.includes(currentDay)) {
+        // Move to next week
+        nextRun = nextRun.plus({ days: 7 });
+      }
+    }
+  }
+
+  // Convert to Firestore Timestamp
+  return Timestamp.fromDate(nextRun.toJSDate());
+}

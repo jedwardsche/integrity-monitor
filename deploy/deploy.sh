@@ -63,75 +63,6 @@ print_warning() {
     echo -e "${YELLOW}⚠${NC} $1"
 }
 
-#########################################
-# Git Commit and Push to Feature Branch
-#########################################
-commit_and_push() {
-    print_status "Checking for uncommitted changes..."
-    
-    # Check if there are any changes
-    if [ -z "$(git status --porcelain)" ]; then
-        print_warning "No changes to commit"
-        return 0
-    fi
-    
-    print_success "Found uncommitted changes"
-    
-    # Show git status
-    echo ""
-    git status --short
-    echo ""
-    
-    # Automatic commit message
-    COMMIT_MESSAGE="new features"
-    
-    # Generate feature branch name with timestamp
-    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    BRANCH_NAME="feature/deploy_${TIMESTAMP}"
-    
-    print_status "Creating and switching to branch: ${BRANCH_NAME}"
-    
-    # Create and checkout new branch
-    if git checkout -b "$BRANCH_NAME" 2>/dev/null; then
-        print_success "Created new branch: ${BRANCH_NAME}"
-    else
-        # Branch might already exist, try to checkout
-        if git checkout "$BRANCH_NAME" 2>/dev/null; then
-            print_warning "Switched to existing branch: ${BRANCH_NAME}"
-        else
-            print_error "Failed to create or checkout branch"
-            exit 1
-        fi
-    fi
-    
-    # Add all changes
-    print_status "Adding all changes..."
-    git add -A
-    print_success "Changes staged"
-    
-    # Commit
-    print_status "Committing changes with message: \"${COMMIT_MESSAGE}\""
-    if git commit -m "$COMMIT_MESSAGE"; then
-        print_success "Changes committed"
-    else
-        print_error "Failed to commit changes"
-        exit 1
-    fi
-    
-    # Push to origin
-    print_status "Pushing to origin/${BRANCH_NAME}..."
-    if git push -u origin "$BRANCH_NAME"; then
-        print_success "Pushed to origin/${BRANCH_NAME}"
-        echo ""
-        print_success "Branch URL: https://github.com/$(git remote get-url origin | sed 's/.*github.com[:/]\(.*\)\.git/\1/')/tree/${BRANCH_NAME}"
-    else
-        print_error "Failed to push to origin"
-        exit 1
-    fi
-    
-    echo ""
-}
-
 # Check if we're in the right directory
 cd "$PROJECT_ROOT"
 if [ ! -f "package.json" ] || [ ! -d "frontend" ] || [ ! -d "backend" ]; then
@@ -144,11 +75,9 @@ DEPLOY_FRONTEND=false
 DEPLOY_BACKEND=false
 DEPLOY_RULES=false
 SKIP_TESTS=false
-COMMIT_AND_PUSH=false
 
 if [ $# -eq 0 ]; then
-    # No arguments, commit, push, and deploy everything
-    COMMIT_AND_PUSH=true
+    # No arguments, deploy everything
     DEPLOY_FRONTEND=true
     DEPLOY_BACKEND=true
     DEPLOY_RULES=true
@@ -168,10 +97,6 @@ else
                 DEPLOY_RULES=true
                 shift
                 ;;
-            --commit|-c)
-                COMMIT_AND_PUSH=true
-                shift
-                ;;
             --skip-tests)
                 SKIP_TESTS=true
                 shift
@@ -182,25 +107,20 @@ else
                 echo "Deploy CHE Data Integrity Monitor to production"
                 echo ""
                 echo "Default behavior (no arguments):"
-                echo "  - Automatically commits all changes with message 'new features'"
-                echo "  - Pushes to feature branch with timestamp: feature/deploy_YYYYMMDD_HHMMSS"
                 echo "  - Deploys frontend, backend, and Firestore rules"
                 echo ""
                 echo "Options:"
-                echo "  --frontend, -f     Deploy frontend only (no auto-commit)"
-                echo "  --backend, -b      Deploy backend only (no auto-commit)"
-                echo "  --rules, -r        Deploy Firestore rules only (no auto-commit)"
-                echo "  --commit, -c       Commit all changes and push to feature branch"
+                echo "  --frontend, -f     Deploy frontend only"
+                echo "  --backend, -b      Deploy backend only"
+                echo "  --rules, -r        Deploy Firestore rules only"
                 echo "  --skip-tests       Skip TypeScript compilation check"
                 echo "  --help, -h         Show this help message"
                 echo ""
                 echo "Examples:"
-                echo "  ./deploy/deploy.sh                    # Auto-commit, push, and deploy everything"
-                echo "  ./deploy/deploy.sh --frontend         # Deploy frontend only (no commit)"
-                echo "  ./deploy/deploy.sh --backend          # Deploy backend only (no commit)"
-                echo "  ./deploy/deploy.sh -f -b              # Deploy frontend and backend (no commit)"
-                echo "  ./deploy/deploy.sh --commit           # Commit and push only (no deploy)"
-                echo "  ./deploy/deploy.sh -c -f              # Commit, push, then deploy frontend"
+                echo "  ./deploy/deploy.sh                    # Deploy everything"
+                echo "  ./deploy/deploy.sh --frontend         # Deploy frontend only"
+                echo "  ./deploy/deploy.sh --backend          # Deploy backend only"
+                echo "  ./deploy/deploy.sh -f -b              # Deploy frontend and backend"
                 exit 0
                 ;;
             *)
@@ -214,7 +134,6 @@ fi
 
 echo ""
 print_status "Deployment plan:"
-echo "  Commit & Push: $([ "$COMMIT_AND_PUSH" = true ] && echo -e "${GREEN}YES${NC}" || echo -e "${YELLOW}NO${NC}")"
 echo "  Frontend:      $([ "$DEPLOY_FRONTEND" = true ] && echo -e "${GREEN}YES${NC}" || echo -e "${YELLOW}NO${NC}")"
 echo "  Backend:       $([ "$DEPLOY_BACKEND" = true ] && echo -e "${GREEN}YES${NC}" || echo -e "${YELLOW}NO${NC}")"
 echo "  Rules:         $([ "$DEPLOY_RULES" = true ] && echo -e "${GREEN}YES${NC}" || echo -e "${YELLOW}NO${NC}")"
@@ -223,7 +142,7 @@ echo "  Region:        ${BLUE}${REGION}${NC}"
 echo ""
 
 # If no deployment tasks selected, exit
-if [ "$COMMIT_AND_PUSH" = false ] && [ "$DEPLOY_FRONTEND" = false ] && [ "$DEPLOY_BACKEND" = false ] && [ "$DEPLOY_RULES" = false ]; then
+if [ "$DEPLOY_FRONTEND" = false ] && [ "$DEPLOY_BACKEND" = false ] && [ "$DEPLOY_RULES" = false ]; then
     print_warning "No tasks selected. Use --help for usage information"
     exit 0
 fi
@@ -231,13 +150,6 @@ fi
 echo ""
 print_status "Starting tasks..."
 echo ""
-
-#########################################
-# Commit and Push (if requested)
-#########################################
-if [ "$COMMIT_AND_PUSH" = true ]; then
-    commit_and_push
-fi
 
 #########################################
 # Deploy Firestore Rules
