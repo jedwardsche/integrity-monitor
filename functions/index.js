@@ -185,6 +185,14 @@ exports.runScheduledScans = onSchedule(
             });
 
             // Compute next run time (pass previous next_run_at for interval-based frequencies)
+            // Log schedule config for debugging
+            if (currentData.frequency === "hourly") {
+              logger.info(`Computing next run for hourly schedule ${scheduleId}`, {
+                frequency: currentData.frequency,
+                interval_minutes: currentData.interval_minutes,
+                previousNextRunAt: nextRunAt?.toDate().toISOString(),
+              });
+            }
             nextRunTimestamp = computeNextRunAt(
               currentData.frequency,
               currentData.time_of_day,
@@ -356,7 +364,15 @@ function computeNextRunAt(frequency, timeOfDay, timezone, daysOfWeek, intervalMi
     : DateTime.now().setZone(timezone);
   let nextRun;
 
-  if (frequency === "hourly" && intervalMinutes) {
+  // For hourly frequency with interval, ensure intervalMinutes is valid
+  if (frequency === "hourly") {
+    if (intervalMinutes == null || intervalMinutes <= 0) {
+      // Fallback: log warning and use default time_of_day
+      logger.warn(`Hourly schedule missing or invalid interval_minutes (${intervalMinutes}), falling back to time_of_day`);
+    }
+  }
+
+  if (frequency === "hourly" && intervalMinutes != null && intervalMinutes > 0) {
     if (previousNextRunAt) {
       // For subsequent runs, increment from previous time
       nextRun = tz.plus({ minutes: intervalMinutes });
