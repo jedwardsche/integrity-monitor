@@ -90,7 +90,12 @@ export function useIntegrityMetrics() {
   useEffect(() => {
     if (runsHook.data.length > 0) {
       const latestRun = runsHook.data[0];
-      const counts = latestRun.counts || {};
+      const counts: {
+        total?: number;
+        by_type?: Record<string, number>;
+        by_severity?: Record<string, number>;
+        by_type_severity?: Record<string, number>;
+      } = latestRun.counts || {};
       
       // Calculate by_severity from by_type_severity if not present
       let bySeverity = counts.by_severity || {};
@@ -108,15 +113,20 @@ export function useIntegrityMetrics() {
       
       // Fallback to severityCounts from metrics if still empty
       if (Object.keys(bySeverity).length === 0) {
-        bySeverity = severityCounts;
+        bySeverity = { ...severityCounts };
       }
       
       setSummary({
         summary: {
           total: counts.total || 0,
           by_type: counts.by_type || {},
+<<<<<<< HEAD
           by_severity: (counts.by_severity || severityCounts) as Record<string, number>,
           by_type_severity: (counts.by_type_severity || {}) as Record<string, number>,
+=======
+          by_severity: bySeverity,
+          by_type_severity: counts.by_type_severity || {},
+>>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
         },
         last_run: latestRun,
         last_run_time: latestRun.started_at?.toDate?.()?.toISOString() || new Date().toISOString(),
@@ -128,7 +138,7 @@ export function useIntegrityMetrics() {
         summary: {
           total: 0,
           by_type: {},
-          by_severity: severityCounts,
+          by_severity: { ...severityCounts },
           by_type_severity: {},
         },
         last_run: null,
