@@ -9,62 +9,16 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Request, status, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-
-# #region agent log
-# Debug log path - only used in local development
-debug_log = Path(__file__).parent.parent / ".cursor" / "debug.log"
-try:
-    if debug_log.parent.exists():
-        with open(debug_log, 'a') as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:1","message":"Module import started","data":{"step":"import_start"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
+from starlette.responses import JSONResponse
 
 # Load environment variables from backend/.env
 from dotenv import load_dotenv
 backend_dir = Path(__file__).parent
 load_dotenv(backend_dir / ".env")
 
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:12","message":"After dotenv load","data":{"step":"after_dotenv"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
-
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:13","message":"Before imports","data":{"step":"before_imports"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
-
 from .config.schema_loader import load_schema_config
-
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:16","message":"After schema_loader import","data":{"step":"after_schema_loader"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
-
 from .middleware.auth import verify_bearer_token, verify_cloud_scheduler_auth, verify_firebase_token
-
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:19","message":"After auth import","data":{"step":"after_auth"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
-
 from .services.integrity_runner import IntegrityRunner
-
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:22","message":"After IntegrityRunner import","data":{"step":"after_integrity_runner_import"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
 
 from .services.airtable_schema_service import schema_service
 from .services.integrity_metrics_service import get_metrics_service
@@ -77,11 +31,20 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # CORS configuration - restrict origins in production
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+if allowed_origins_env:
+    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+else:
+    # Default for local development: allow localhost frontend
+    allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+# For wildcard, we can't use credentials, so disable credentials
+use_credentials = "*" not in allowed_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins if allowed_origins != ["*"] else ["*"],
-    allow_credentials=True if allowed_origins != ["*"] else False,
+    allow_origins=allowed_origins,
+    allow_credentials=use_credentials,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
@@ -101,34 +64,46 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestIDMiddleware)
 
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:51","message":"Starting schema config load","data":{"step":"before_load_schema_config"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
+# Global exception handler to ensure CORS headers are always added
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler that ensures CORS headers are always present."""
+    if isinstance(exc, HTTPException):
+        status_code = exc.status_code
+        detail = exc.detail
+        headers = exc.headers or {}
+    else:
+        status_code = 500
+        detail = f"Internal server error: {str(exc)}"
+        headers = {}
+        logger.error("Unhandled exception", exc_info=True, extra={"path": request.url.path})
+    
+    # Create response with CORS headers
+    response = JSONResponse(
+        status_code=status_code,
+        content={"detail": detail},
+        headers=headers
+    )
+    
+    # Add CORS headers manually if not already present
+    origin = request.headers.get("origin")
+    if origin and origin in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    elif not allowed_origins or "*" in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = "*"
+    
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+    
+    return response
 
 schema_config = load_schema_config()
-
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:52","message":"Schema config loaded, starting IntegrityRunner init","data":{"step":"before_integrity_runner"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
-
 runner = IntegrityRunner()
 
 # Global dictionary to track running scans: {run_id: threading.Event}
 running_scans: dict[str, threading.Event] = {}
 running_scans_lock = threading.Lock()
-
-# #region agent log
-try:
-    with open(debug_log, 'a') as f:
-        f.write(json.dumps({"sessionId":"debug-session","runId":"startup","hypothesisId":"A","location":"main.py:53","message":"IntegrityRunner initialized, module load complete","data":{"step":"after_integrity_runner"},"timestamp":int(time.time()*1000)})+'\n')
-except: pass
-# #endregion agent log
 
 
 @app.get("/health")
@@ -592,9 +567,13 @@ def delete_integrity_run(run_id: str, request: Request):
 def airtable_schema():
     """Return the full Airtable schema snapshot JSON (requires authentication)."""
     try:
-        return schema_service.load()
+        result = schema_service.load()
+        return result
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Error loading schema", exc_info=True, extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}") from exc
 
 
 @app.get("/airtable/schema/summary")
@@ -821,6 +800,59 @@ def integrity_metrics_flagged_rules():
     metrics_service = get_metrics_service()
     flagged_rules = metrics_service.get_flagged_rules()
     return {"flagged_rules": flagged_rules, "count": len(flagged_rules)}
+
+
+@app.delete("/integrity/issue/{issue_id}", dependencies=[Depends(verify_firebase_token)])
+def delete_integrity_issue(issue_id: str, request: Request):
+    """Delete an integrity issue from Firestore.
+    
+    Args:
+        issue_id: Issue identifier to delete
+        request: FastAPI request object (injected)
+    
+    Returns:
+        - 200: Success (issue deleted)
+        - 404: Issue not found
+        - 500: Server error
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.info("Integrity issue deletion requested", extra={"issue_id": issue_id, "request_id": request_id})
+    
+    try:
+        from .clients.firestore import FirestoreClient
+        from .config.config_loader import load_runtime_config
+        
+        config = load_runtime_config()
+        firestore_client = FirestoreClient(config.firestore)
+        client = firestore_client._get_client()
+        
+        # Delete the issue document
+        issue_ref = client.collection(config.firestore.issues_collection).document(issue_id)
+        issue_doc = issue_ref.get()
+        
+        if not issue_doc.exists:
+            logger.warning("Issue not found in Firestore", extra={"issue_id": issue_id, "request_id": request_id})
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "Issue not found", "issue_id": issue_id},
+            )
+        
+        issue_ref.delete()
+        
+        logger.info("Integrity issue deleted", extra={"issue_id": issue_id, "request_id": request_id})
+        return {"status": "success", "message": "Issue deleted successfully", "issue_id": issue_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to delete integrity issue",
+            extra={"issue_id": issue_id, "error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to delete issue", "message": str(exc), "issue_id": issue_id},
+        )
 
 
 @app.get("/integrity/metrics/kpi")

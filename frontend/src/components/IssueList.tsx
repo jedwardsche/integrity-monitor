@@ -1,12 +1,20 @@
-import { useState, useEffect, useMemo } from "react";
-import type { Issue, IssueFilters } from "../hooks/useFirestoreIssues";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import type { IssueFilters } from "../hooks/useFirestoreIssues";
 import { useFirestoreIssues } from "../hooks/useFirestoreIssues";
+import { useIssueCounts } from "../hooks/useIssueCounts";
 import { useIssueActions } from "../hooks/useIssueActions";
 import { useAuth } from "../hooks/useAuth";
-import { getAirtableLinkByEntity, getDataIssuesLink } from "../utils/airtable";
+import { getAirtableLinksWithFallback } from "../utils/airtable";
+import { formatRuleId } from "../utils/ruleFormatter";
 import ConfirmModal from "./ConfirmModal";
+import openInNewTabIcon from "../assets/open_in_new_tab.svg";
+import arrowLeftIcon from "../assets/keyboard_arrow_left.svg";
+import arrowRightIcon from "../assets/keyboard_arrow_right.svg";
+import doubleArrowLeftIcon from "../assets/keyboard_double_arrow_left.svg";
+import doubleArrowRightIcon from "../assets/keyboard_double_arrow_right.svg";
 
-const ITEMS_PER_PAGE = 25;
+const ITEMS_PER_PAGE = 100;
 
 interface IssueListProps {
   filters?: IssueFilters;
@@ -17,54 +25,89 @@ export function IssueList({
   filters: initialFilters = {},
   onClose,
 }: IssueListProps) {
-  const [filters, setFilters] = useState<IssueFilters>(initialFilters);
+  const navigate = useNavigate();
+  // If initialFilters provided, use them (for queue filtering from dashboard)
+  // Otherwise default to showing all open issues
+  const [filters, setFilters] = useState<IssueFilters>(
+    initialFilters || { status: "open" }
+  );
   const [search, setSearch] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
+  const [pageInput, setPageInput] = useState("");
+
+  // Sync filters when initialFilters change (from parent component like DashboardContent)
+  useEffect(() => {
+    if (initialFilters) {
+      // When filters come from parent (like queue selection), replace filters completely
+      // This ensures queue filtering works correctly
+      setFilters({
+        ...initialFilters,
+        // Default to "open" status if not specified and we have a type filter (from queue)
+        status: initialFilters.status || (initialFilters.type ? "open" : "all"),
+      });
+    }
+  }, [
+    initialFilters?.type,
+    initialFilters?.severity,
+    initialFilters?.entity,
+    initialFilters?.status,
+  ]);
+
+  // Get counts for total pages calculation
+  const { counts } = useIssueCounts();
+
   const {
-    data: allIssues,
+    data: issues,
     loading,
     error,
-  } = useFirestoreIssues({ ...filters, search });
-  const { markResolved, loading: actionLoading } = useIssueActions();
+    hasMore,
+    hasPrev,
+    currentPage,
+    nextPage,
+    prevPage,
+    goToPage,
+    goToLastPage,
+  } = useFirestoreIssues({ ...filters, search }, ITEMS_PER_PAGE);
+
+  // Calculate total pages based on filtered count
+  const getFilteredCount = () => {
+    if (filters.status === "open") return counts.open;
+    if (filters.status === "closed") return counts.closed;
+    if (filters.status === "resolved") return counts.resolved;
+    return counts.all;
+  };
+  const totalPages = Math.ceil(getFilteredCount() / ITEMS_PER_PAGE) || 1;
+
+  const {
+    markResolved,
+    deleteIssue,
+    loading: actionLoading,
+  } = useIssueActions();
   const { isAdmin } = useAuth();
   const [resolvingId, setResolvingId] = useState<string | null>(null);
-  const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean; issueId: string | null }>({
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    issueId: string | null;
+    action: "resolve" | "delete" | null;
+  }>({
     isOpen: false,
     issueId: null,
+    action: null,
   });
 
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [filters, search]);
-
-  // Calculate pagination
-  const { issues, totalIssues, totalPages, startIndex, endIndex } =
-    useMemo(() => {
-      const total = allIssues.length;
-      const pages = Math.ceil(total / ITEMS_PER_PAGE);
-      const start = (currentPage - 1) * ITEMS_PER_PAGE;
-      const end = start + ITEMS_PER_PAGE;
-      const paginatedIssues = allIssues.slice(start, end);
-
-      return {
-        issues: paginatedIssues,
-        totalIssues: total,
-        totalPages: pages,
-        startIndex: start,
-        endIndex: Math.min(end, total),
-      };
-    }, [allIssues, currentPage]);
-
   const initiateResolve = (issueId: string) => {
-    setConfirmModal({ isOpen: true, issueId });
+    setConfirmModal({ isOpen: true, issueId, action: "resolve" });
+  };
+
+  const initiateDelete = (issueId: string) => {
+    setConfirmModal({ isOpen: true, issueId, action: "delete" });
   };
 
   const handleConfirmResolve = async () => {
     const issueId = confirmModal.issueId;
     if (!issueId) return;
 
-    setConfirmModal({ isOpen: false, issueId: null });
+    setConfirmModal({ isOpen: false, issueId: null, action: null });
     setResolvingId(issueId);
     try {
       await markResolved(issueId);
@@ -72,6 +115,21 @@ export function IssueList({
       alert(err instanceof Error ? err.message : "Failed to resolve issue");
     } finally {
       setResolvingId(null);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    const issueId = confirmModal.issueId;
+    if (!issueId) return;
+
+    setConfirmModal({ isOpen: false, issueId: null, action: null });
+    setDeletingId(issueId);
+    try {
+      await deleteIssue(issueId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete issue");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -127,25 +185,24 @@ export function IssueList({
         </div>
       )}
 
-      <div className="flex gap-2">
+      {/* Filters Row */}
+      <div className="flex flex-wrap gap-2">
         <input
           type="text"
           placeholder="Search by rule ID or record ID..."
           value={search}
           onChange={(e) => handleSearch(e.target.value)}
-          className="flex-1 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+          className="flex-1 min-w-[200px] rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
         />
         <select
-          value={filters.severity || ""}
-          onChange={(e) =>
-            setFilters({ ...filters, severity: e.target.value || undefined })
-          }
+          value={filters.status || "all"}
+          onChange={(e) => setFilters({ ...filters, status: e.target.value })}
           className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
         >
-          <option value="">All Severities</option>
-          <option value="critical">Critical</option>
-          <option value="warning">Warning</option>
-          <option value="info">Info</option>
+          <option value="all">All Statuses</option>
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+          <option value="resolved">Resolved</option>
         </select>
         <select
           value={filters.type || ""}
@@ -160,7 +217,146 @@ export function IssueList({
           <option value="missing_field">Missing Field</option>
           <option value="attendance">Attendance</option>
         </select>
+        <select
+          value={filters.severity || ""}
+          onChange={(e) =>
+            setFilters({ ...filters, severity: e.target.value || undefined })
+          }
+          className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+        >
+          <option value="">All Severities</option>
+          <option value="critical">Critical</option>
+          <option value="warning">Warning</option>
+          <option value="info">Info</option>
+        </select>
+        <select
+          value={filters.entity || ""}
+          onChange={(e) =>
+            setFilters({ ...filters, entity: e.target.value || undefined })
+          }
+          className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+        >
+          <option value="">All Entities</option>
+          <option value="student">Student</option>
+          <option value="students">Students</option>
+          <option value="parent">Parent</option>
+          <option value="parents">Parents</option>
+          <option value="contractor">Contractor</option>
+          <option value="contractors">Contractors</option>
+          <option value="class">Class</option>
+          <option value="classes">Classes</option>
+        </select>
       </div>
+
+      {/* Pagination Header */}
+      {!loading && !error && issues.length > 0 && (
+        <div className="flex items-center justify-between text-sm py-2">
+          <div className="text-[var(--text-muted)]">
+            {issues.length} issues shown · {getFilteredCount()} total
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => goToPage(1)}
+              disabled={currentPage === 1 || loading}
+              className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+                currentPage === 1 || loading
+                  ? "cursor-not-allowed opacity-40"
+                  : ""
+              }`}
+              title="First page"
+            >
+              <img
+                src={doubleArrowLeftIcon}
+                alt="First"
+                className="w-5 h-5"
+                style={{
+                  filter:
+                    "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+                }}
+              />
+            </button>
+            <button
+              onClick={prevPage}
+              disabled={!hasPrev || loading}
+              className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+                !hasPrev || loading ? "cursor-not-allowed opacity-40" : ""
+              }`}
+              title="Previous page"
+            >
+              <img
+                src={arrowLeftIcon}
+                alt="Previous"
+                className="w-5 h-5"
+                style={{
+                  filter:
+                    "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+                }}
+              />
+            </button>
+            <div className="flex items-center gap-1 mx-1">
+              <span className="text-[var(--text-muted)]">Page</span>
+              <input
+                type="number"
+                min={1}
+                max={totalPages}
+                value={pageInput !== "" ? pageInput : currentPage}
+                onChange={(e) => setPageInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const page = parseInt(pageInput, 10);
+                    if (!isNaN(page) && page >= 1 && page <= totalPages) {
+                      goToPage(page, totalPages);
+                      setPageInput("");
+                    }
+                  }
+                }}
+                onBlur={() => setPageInput("")}
+                className="w-14 rounded-lg border border-[var(--text-main)] px-2 py-1 text-sm text-center text-[var(--text-main)]"
+              />
+              <span className="text-[var(--text-muted)]">of {totalPages}</span>
+            </div>
+            <button
+              onClick={nextPage}
+              disabled={!hasMore || loading}
+              className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+                !hasMore || loading ? "cursor-not-allowed opacity-40" : ""
+              }`}
+              title="Next page"
+            >
+              <img
+                src={arrowRightIcon}
+                alt="Next"
+                className="w-5 h-5"
+                style={{
+                  filter:
+                    "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+                }}
+              />
+            </button>
+            <button
+              onClick={() => goToLastPage(totalPages)}
+              disabled={currentPage === totalPages || !hasMore || loading}
+              className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+                currentPage === totalPages || !hasMore || loading
+                  ? "cursor-not-allowed opacity-40"
+                  : ""
+              }`}
+              title="Last page"
+            >
+              <img
+                src={doubleArrowRightIcon}
+                alt="Last"
+                className="w-5 h-5"
+                style={{
+                  filter:
+                    "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+                }}
+              />
+            </button>
+          </div>
+        </div>
+      )}
 
       {loading && (
         <div className="text-center py-8 text-[var(--text-muted)]">
@@ -183,8 +379,8 @@ export function IssueList({
 
       {!loading && !error && issues.length > 0 && (
         <>
-          <div className="overflow-hidden rounded-3xl border border-[var(--border)] bg-white">
-            <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto rounded-3xl border border-[var(--border)] bg-white">
+            <table className="w-full text-left text-sm min-w-[800px]">
               <thead className="bg-[var(--bg-mid)] text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">
                 <tr>
                   <th className="px-4 py-3">Rule</th>
@@ -197,17 +393,23 @@ export function IssueList({
               </thead>
               <tbody>
                 {issues.map((issue) => {
-                  const airtableLink = getAirtableLinkByEntity(
+                  const airtableLinks = getAirtableLinksWithFallback(
                     issue.entity,
                     issue.record_id
                   );
                   return (
                     <tr
                       key={issue.id}
-                      className="border-t border-[var(--border)]/70"
+                      className="border-t border-[var(--border)]/70 cursor-pointer hover:bg-[var(--bg-mid)]/30 transition-colors"
+                      onClick={() => navigate(`/issue/${issue.id}`)}
                     >
-                      <td className="px-4 py-3 font-mono text-xs">
-                        {issue.rule_id}
+                      <td className="px-4 py-3 text-xs">
+                        <span
+                          className="text-[var(--text-main)]"
+                          title={issue.rule_id}
+                        >
+                          {formatRuleId(issue.rule_id)}
+                        </span>
                       </td>
                       <td className="px-4 py-3">{issue.entity}</td>
                       <td className="px-4 py-3">
@@ -219,36 +421,67 @@ export function IssueList({
                           {issue.severity}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-[var(--cta-blue)]">
-                        {issue.record_id}
+                      <td className="px-4 py-3 font-mono text-xs">
+                        <a
+                          href={
+                            airtableLinks?.primary || `https://airtable.com`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-[var(--cta-blue)] hover:underline cursor-pointer inline-flex items-center gap-1"
+                          title={`Open ${issue.record_id} in Airtable (${issue.entity})`}
+                        >
+                          {issue.record_id}
+                          <img
+                            src={openInNewTabIcon}
+                            alt="Open in new tab"
+                            className="w-3 h-3 inline-block"
+                            style={{
+                              filter:
+                                "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
+                            }}
+                          />
+                        </a>
                       </td>
                       <td className="px-4 py-3 text-right text-xs text-[var(--text-muted)]">
                         {formatAge(issue.created_at)}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          {airtableLink && (
-                            <a
-                              href={airtableLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-[var(--cta-blue)] hover:underline"
-                            >
-                              Open
-                            </a>
-                          )}
+                        <div
+                          className="flex items-center justify-end gap-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            onClick={() => navigate(`/issue/${issue.id}`)}
+                            className="text-xs text-[var(--cta-blue)] hover:underline"
+                          >
+                            Open
+                          </button>
                           {isAdmin && (
-                            <button
-                              onClick={() => initiateResolve(issue.id)}
-                              disabled={
-                                actionLoading && resolvingId === issue.id
-                              }
-                              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-50"
-                            >
-                              {actionLoading && resolvingId === issue.id
-                                ? "..."
-                                : "Resolve"}
-                            </button>
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  initiateResolve(issue.id);
+                                }}
+                                disabled={
+                                  actionLoading && resolvingId === issue.id
+                                }
+                                className="text-xs text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-50"
+                              >
+                                {actionLoading && resolvingId === issue.id
+                                  ? "..."
+                                  : "Resolve"}
+                              </button>
+                              <button
+                                onClick={() => initiateDelete(issue.id)}
+                                disabled={deletingId === issue.id}
+                                className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50"
+                              >
+                                {deletingId === issue.id ? "..." : "Delete"}
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -258,46 +491,28 @@ export function IssueList({
               </tbody>
             </table>
           </div>
-
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between text-sm">
-              <div className="text-[var(--text-muted)]">
-                Showing {startIndex + 1}-{endIndex} of {totalIssues} issues
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-[var(--text-main)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--bg-mid)]"
-                >
-                  Previous
-                </button>
-                <span className="text-[var(--text-muted)]">
-                  Page {currentPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() =>
-                    setCurrentPage((p) => Math.min(totalPages, p + 1))
-                  }
-                  disabled={currentPage === totalPages}
-                  className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-[var(--text-main)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--bg-mid)]"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
         </>
       )}
 
       <ConfirmModal
-        isOpen={confirmModal.isOpen}
+        isOpen={confirmModal.isOpen && confirmModal.action === "resolve"}
         title="Resolve Issue"
         message="Are you sure you want to mark this issue as resolved? This will update the status in Firestore."
         confirmLabel="Resolve"
         onConfirm={handleConfirmResolve}
-        onCancel={() => setConfirmModal({ isOpen: false, issueId: null })}
+        onCancel={() =>
+          setConfirmModal({ isOpen: false, issueId: null, action: null })
+        }
+      />
+      <ConfirmModal
+        isOpen={confirmModal.isOpen && confirmModal.action === "delete"}
+        title="Delete Issue"
+        message="Are you sure you want to delete this issue? This action cannot be undone and will permanently remove the issue from Firebase."
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() =>
+          setConfirmModal({ isOpen: false, issueId: null, action: null })
+        }
       />
     </div>
   );

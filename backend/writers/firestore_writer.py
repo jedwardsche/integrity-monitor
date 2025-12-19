@@ -96,6 +96,8 @@ class FirestoreWriter:
             }
             if issue.related_records:
                 issue_dict["related_records"] = issue.related_records
+            if run_id:
+                issue_dict["run_id"] = run_id
             issue_dicts.append(issue_dict)
         
         # Create progress callback if run_id is provided

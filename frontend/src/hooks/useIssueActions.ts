@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { doc, updateDoc, getDoc } from "firebase/firestore";
 import { db, auth } from "../config/firebase";
+import { API_BASE } from "../config/api";
 
 export function useIssueActions() {
   const [loading, setLoading] = useState(false);
@@ -55,9 +56,44 @@ export function useIssueActions() {
     }
   };
 
+  const deleteIssue = async (issueId: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Not authenticated");
+
+      // Get Firebase ID token for API authentication
+      const token = await user.getIdToken();
+
+      const response = await fetch(`${API_BASE}/integrity/issue/${issueId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: "Failed to delete issue" }));
+        throw new Error(errorData.error || "Failed to delete issue");
+      }
+
+      setLoading(false);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete issue");
+      setLoading(false);
+      throw err;
+    }
+  };
+
   return {
     markResolved,
     markIgnored,
+    deleteIssue,
     loading,
     error,
   };

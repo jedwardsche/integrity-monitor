@@ -4,6 +4,7 @@ import { useRunStatus } from "../hooks/useRunStatus";
 import { useRunLogs } from "../hooks/useRunLogs";
 import { useAuth } from "../hooks/useAuth";
 import { API_BASE } from "../config/api";
+import { IssueList } from "../components/IssueList";
 
 export function RunStatusPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -22,7 +23,8 @@ export function RunStatusPage() {
       statusLower !== "success" &&
       statusLower !== "error" &&
       statusLower !== "warning" &&
-      statusLower !== "healthy"
+      statusLower !== "healthy" &&
+      statusLower !== "critical"
     : false;
 
   if (loading) {
@@ -76,7 +78,7 @@ export function RunStatusPage() {
     runStatus.started_at?.toDate?.() ||
     new Date(runStatus.started_at || Date.now());
   const endTime = runStatus.ended_at?.toDate?.() || null;
-  
+
   // Prefer duration_ms from Firestore if available, otherwise calculate from timestamps
   const elapsed = runStatus.duration_ms
     ? Math.floor(runStatus.duration_ms / 1000)
@@ -95,6 +97,7 @@ export function RunStatusPage() {
       case "success":
       case "healthy":
         return "bg-green-100 text-green-800";
+      case "critical":
       case "error":
         return "bg-red-100 text-red-800";
       case "warning":
@@ -102,6 +105,8 @@ export function RunStatusPage() {
       case "cancelled":
       case "canceled":
         return "bg-gray-100 text-gray-800";
+      case "running":
+        return "bg-blue-100 text-blue-800";
       default:
         return "bg-blue-100 text-blue-800";
     }
@@ -111,14 +116,18 @@ export function RunStatusPage() {
     switch (status?.toLowerCase()) {
       case "success":
       case "healthy":
-        return "Completed";
+        return "Healthy";
+      case "critical":
+        return "Critical";
       case "error":
         return "Failed";
       case "warning":
-        return "Completed with Warnings";
+        return "Warning";
       case "cancelled":
       case "canceled":
         return "Cancelled";
+      case "running":
+        return "Running";
       default:
         return "Running";
     }
@@ -416,9 +425,7 @@ export function RunStatusPage() {
           </div>
           {(() => {
             const latestLog =
-              logs.length > 0
-                ? logs[0]?.message?.toLowerCase() || ""
-                : "";
+              logs.length > 0 ? logs[0]?.message?.toLowerCase() || "" : "";
             let progress = 0;
             let stageLabel = "Initializing";
 
@@ -572,6 +579,21 @@ export function RunStatusPage() {
           })}
         </div>
       </div>
+
+      {/* Issues from This Run */}
+      {!isRunning && runStatus.ended_at && runId && (
+        <div className="rounded-2xl border border-[var(--border)] bg-white p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2
+              className="text-lg font-semibold text-[var(--text-main)]"
+              style={{ fontFamily: "Outfit" }}
+            >
+              Issues from This Run
+            </h2>
+          </div>
+          <IssueList filters={{ run_id: runId }} />
+        </div>
+      )}
     </div>
   );
 }

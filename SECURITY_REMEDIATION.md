@@ -47,12 +47,12 @@
    - **Location:** `backend/data-integrity-service-account2.json`
    - **Project:** data-integrity-monitor
    - **Service Account:** `firebase-adminsdk-fbsvc@data-integrity-monitor.iam.gserviceaccount.com`
-   - **Private Key ID:** `9bfdc39d072252547d9544e5bf23cbeba7932f62`
+   - **Private Key ID:** `[REDACTED - Key has been rotated]`
    - **Action Required:**
 
      ```bash
      # Disable the compromised key
-     gcloud iam service-accounts keys delete 9bfdc39d072252547d9544e5bf23cbeba7932f62 \
+     gcloud iam service-accounts keys delete [KEY_ID] \
        --iam-account=firebase-adminsdk-fbsvc@data-integrity-monitor.iam.gserviceaccount.com
 
      # Create new key (for local dev only - DO NOT COMMIT)
@@ -67,7 +67,7 @@
 2. **Airtable Personal Access Token (PAT)**
 
    - **Variable Name:** `AIRTABLE_PAT`
-   - **Current Value:** `patYDSQtwZjOS9zKv.f28d25f9f00abbbced853e50aa984ae2b593fd1637f35c897506479a4f2019ac`
+   - **Current Value:** `[REDACTED - Token has been rotated]`
    - **Action Required:**
      1. Go to https://airtable.com/create/tokens
      2. Revoke existing token
@@ -80,7 +80,7 @@
 
 3. **API Authentication Token**
    - **Variable Name:** `API_AUTH_TOKEN`
-   - **Current Value:** `e0ad071a8010918a2beba3ae19574620bb71d28cbd7100d636c51dfbb35dfca9`
+   - **Current Value:** `[REDACTED - Token has been rotated]`
    - **Action Required:**
      1. Generate new secure token:
         ```bash
@@ -273,7 +273,7 @@ ln -s ../../scripts/check-secrets.sh .git/hooks/pre-commit
 
 ### Immediate (Today):
 
-1. ✅ Rotate Firebase service account key (delete old key ID: `9bfdc39d072252547d9544e5bf23cbeba7932f62`)
+1. ✅ Rotate Firebase service account key (delete old key ID: `[REDACTED - Key has been rotated]`)
 2. ✅ Rotate Airtable PAT
 3. ✅ Generate new API_AUTH_TOKEN
 4. ✅ Create all 8 secrets in Secret Manager using `deploy/create-secrets.sh`

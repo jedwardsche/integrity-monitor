@@ -25,6 +25,7 @@ from ..writers.firestore_writer import FirestoreWriter
 from ..services.feedback_analyzer import get_feedback_analyzer
 from ..services.table_id_discovery import discover_table_ids
 from ..services.config_updater import update_config
+from ..services.status_calculator import calculate_result_status
 
 logger = get_logger(__name__)
 
@@ -517,6 +518,24 @@ class IntegrityRunner:
             # Always write to Firestore, even on failure
             try:
                 with timed("write_firestore", metrics):
+                    # Calculate result status BEFORE writing if run completed successfully
+                    # Only calculate result status if run completed successfully (no technical errors)
+                    if (status == "running" or status == "success") and not failed_checks and not error_message:
+                        # Calculate result status based on issue counts
+                        # summary is from scorer.summarize() - flat dict with keys like "issue_type:severity"
+                        summary_for_calc = summary if "summary" in locals() and summary else {}
+                        result_status = calculate_result_status(summary_for_calc)
+                        logger.info(
+                            "Calculated result status",
+                            extra={
+                                "run_id": run_id,
+                                "previous_status": status,
+                                "result_status": result_status,
+                                "summary_total": sum(summary_for_calc.values()) if summary_for_calc else 0,
+                            },
+                        )
+                        status = result_status
+                    
                     run_metadata = {
                         "mode": mode,
                         "trigger": trigger,
@@ -547,7 +566,8 @@ class IntegrityRunner:
                             exc_info=True,
                         )
                     
-                    if status == "success":
+                    # Write metrics if run completed successfully (healthy, warning, or critical - not failed)
+                    if status in ("healthy", "warning", "critical", "success"):
                         try:
                             metrics_payload = {**summary, **entity_counts}
                             self._firestore_writer.write_metrics(metrics_payload)
@@ -576,7 +596,8 @@ class IntegrityRunner:
                             # Don't fail the run if issue writing fails
                     
                     # Analyze ignored issues and flag rules (nightly runs only)
-                    if trigger == "nightly" and status == "success":
+                    # Only run feedback analysis if run completed successfully (not failed)
+                    if trigger == "nightly" and status in ("healthy", "warning", "critical", "success"):
                         try:
                             with timed("feedback_analysis", metrics):
                                 feedback_analyzer = get_feedback_analyzer(self._runtime_config)
@@ -597,9 +618,7 @@ class IntegrityRunner:
                     
                     log_write(logger, run_id, "firestore", 1, metrics.get("duration_write_firestore", 0))
                     
-                    # Determine final status after all operations complete
-                    if status == "running" and not failed_checks and not error_message:
-                        status = "success"
+                    # Status was already calculated and written above, no need to recalculate here
             except Exception as exc:
                 logger.error("Firestore write failed", extra={"run_id": run_id}, exc_info=True)
                 # This is critical - log but don't fail the run
@@ -664,8 +683,12 @@ class IntegrityRunner:
 
             # Ensure status is not "running" before writing final status
             # This acts as a safety net in case status wasn't set earlier
+            # Only calculate result status if run completed successfully (no technical errors)
             if status == "running" and not failed_checks and not error_message:
-                status = "success"
+                # Calculate result status based on issue counts
+                # summary may be empty dict if no issues found, which is fine - will return "healthy"
+                result_status = calculate_result_status(summary if "summary" in locals() else {})
+                status = result_status
 
             # Ensure final status is written
             try:

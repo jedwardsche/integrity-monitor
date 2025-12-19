@@ -16,7 +16,6 @@ import { useIssueActions } from "../hooks/useIssueActions";
 import { useAuth } from "../hooks/useAuth";
 import ConfirmModal from "../components/ConfirmModal";
 import openInNewTabIcon from "../assets/open_in_new_tab.svg";
-import { API_BASE } from "../config/api";
 
 export function IssueDetailPage() {
   const { issueId } = useParams<{ issueId: string }>();
@@ -26,8 +25,12 @@ export function IssueDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [relatedIssues, setRelatedIssues] = useState<Issue[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(false);
-  const { markResolved, loading: actionLoading } = useIssueActions();
-  const { isAdmin, getToken } = useAuth();
+  const {
+    markResolved,
+    deleteIssue,
+    loading: actionLoading,
+  } = useIssueActions();
+  const { isAdmin } = useAuth();
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
@@ -235,21 +238,7 @@ export function IssueDetailPage() {
     setConfirmModal({ isOpen: false, action: null });
     setDeletingId(issue.id);
     try {
-      const token = await getToken();
-      const response = await fetch(`${API_BASE}/integrity/issue/${issue.id}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response
-          .json()
-          .catch(() => ({ error: "Failed to delete issue" }));
-        throw new Error(errorData.error || "Failed to delete issue");
-      }
+      await deleteIssue(issue.id);
       navigate(-1);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete issue");
@@ -283,7 +272,7 @@ export function IssueDetailPage() {
 
   const airtableLinks = issue
     ? getAirtableLinksWithFallback(issue.entity, issue.record_id)
-    : null;
+    : { primary: "https://airtable.com" };
   const relatedRecords = issue?.related_records || [];
   const metadata = issue?.metadata || {};
 
@@ -372,29 +361,23 @@ export function IssueDetailPage() {
               <h3 className="text-sm font-medium text-[var(--text-muted)] mb-2">
                 Record ID
               </h3>
-              {airtableLinks ? (
-                <a
-                  href={airtableLinks.primary}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-mono text-sm text-[var(--cta-blue)] hover:underline inline-flex items-center gap-1"
-                >
-                  {issue.record_id}
-                  <img
-                    src={openInNewTabIcon}
-                    alt="Open in new tab"
-                    className="w-3 h-3 inline-block"
-                    style={{
-                      filter:
-                        "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
-                    }}
-                  />
-                </a>
-              ) : (
-                <p className="font-mono text-sm text-[var(--text-main)]">
-                  {issue.record_id}
-                </p>
-              )}
+              <a
+                href={airtableLinks?.primary || `https://airtable.com`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-sm text-[var(--cta-blue)] hover:underline inline-flex items-center gap-1"
+              >
+                {issue.record_id}
+                <img
+                  src={openInNewTabIcon}
+                  alt="Open in new tab"
+                  className="w-3 h-3 inline-block"
+                  style={{
+                    filter:
+                      "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
+                  }}
+                />
+              </a>
             </div>
           </div>
 
@@ -465,29 +448,23 @@ export function IssueDetailPage() {
                           Duplicate #{idx}
                         </span>
                       )}
-                      {recordLinks ? (
-                        <a
-                          href={recordLinks.primary}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-mono text-sm text-[var(--cta-blue)] hover:underline inline-flex items-center gap-1"
-                        >
-                          {recordId}
-                          <img
-                            src={openInNewTabIcon}
-                            alt="Open in new tab"
-                            className="w-3 h-3 inline-block"
-                            style={{
-                              filter:
-                                "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
-                            }}
-                          />
-                        </a>
-                      ) : (
-                        <span className="font-mono text-sm text-[var(--text-main)]">
-                          {recordId}
-                        </span>
-                      )}
+                      <a
+                        href={recordLinks?.primary || `https://airtable.com`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-sm text-[var(--cta-blue)] hover:underline inline-flex items-center gap-1"
+                      >
+                        {recordId}
+                        <img
+                          src={openInNewTabIcon}
+                          alt="Open in new tab"
+                          className="w-3 h-3 inline-block"
+                          style={{
+                            filter:
+                              "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
+                          }}
+                        />
+                      </a>
                     </div>
                   </div>
                 );
@@ -541,29 +518,23 @@ export function IssueDetailPage() {
                         <div className="text-xs text-[var(--text-muted)] mb-1">
                           {formatRuleId(relatedIssue.rule_id)}
                         </div>
-                        {relatedLinks ? (
-                          <a
-                            href={relatedLinks.primary}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-mono text-xs text-[var(--cta-blue)] hover:underline inline-flex items-center gap-1"
-                          >
-                            {relatedIssue.record_id}
-                            <img
-                              src={openInNewTabIcon}
-                              alt="Open in new tab"
-                              className="w-3 h-3 inline-block"
-                              style={{
-                                filter:
-                                  "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
-                              }}
-                            />
-                          </a>
-                        ) : (
-                          <span className="font-mono text-xs text-[var(--text-main)]">
-                            {relatedIssue.record_id}
-                          </span>
-                        )}
+                        <a
+                          href={relatedLinks?.primary || `https://airtable.com`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono text-xs text-[var(--cta-blue)] hover:underline inline-flex items-center gap-1"
+                        >
+                          {relatedIssue.record_id}
+                          <img
+                            src={openInNewTabIcon}
+                            alt="Open in new tab"
+                            className="w-3 h-3 inline-block"
+                            style={{
+                              filter:
+                                "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
+                            }}
+                          />
+                        </a>
                       </div>
                     );
                   })}

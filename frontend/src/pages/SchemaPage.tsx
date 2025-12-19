@@ -74,6 +74,7 @@ export function SchemaPage() {
       try {
         // Only try to get token if user is authenticated
         const token = user ? await getToken() : null;
+
         const data = await fetchJson<AirtableSchema>(
           "/airtable/schema",
           token || undefined

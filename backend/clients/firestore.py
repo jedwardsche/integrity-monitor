@@ -60,6 +60,7 @@ class FirestoreClient:
                 cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
                 if cred_path:
                     # Resolve relative paths relative to backend directory
+                    original_path = cred_path
                     if not os.path.isabs(cred_path):
                         backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                         resolved_path = os.path.join(backend_dir, cred_path)
@@ -99,13 +100,36 @@ class FirestoreClient:
                         logger.info(f"Firestore client initialized with credentials from {cred_path}")
                     else:
                         logger.warning(
-                            f"Service account file not found at {cred_path}. "
-                            f"Trying default credentials..."
+                            f"Service account file not found at {original_path} (resolved to {cred_path}). "
+                            f"Falling back to Application Default Credentials (ADC). "
+                            f"To fix: either set up ADC with 'gcloud auth application-default login' "
+                            f"or remove GOOGLE_APPLICATION_CREDENTIALS from your environment."
                         )
-                        self._client = firestore.Client()
+                        # Try default credentials
+                        try:
+                            self._client = firestore.Client()
+                            logger.info("Firestore client initialized with Application Default Credentials")
+                        except DefaultCredentialsError:
+                            # Re-raise with more helpful message
+                            raise RuntimeError(
+                                f"Firestore credentials not configured. "
+                                f"GOOGLE_APPLICATION_CREDENTIALS is set to '{original_path}' but the file was not found. "
+                                f"Application Default Credentials (ADC) are also not available. "
+                                f"To fix: either set up ADC with 'gcloud auth application-default login' "
+                                f"or remove/unset GOOGLE_APPLICATION_CREDENTIALS from your environment."
+                            ) from None
                 else:
                     # No explicit path, try default credentials
-                    self._client = firestore.Client()
+                    try:
+                        self._client = firestore.Client()
+                        logger.info("Firestore client initialized with Application Default Credentials")
+                    except DefaultCredentialsError:
+                        # Re-raise with more helpful message
+                        raise RuntimeError(
+                            f"Firestore credentials not configured. "
+                            f"No GOOGLE_APPLICATION_CREDENTIALS set and Application Default Credentials (ADC) are not available. "
+                            f"To fix: run 'gcloud auth application-default login' to set up ADC."
+                        ) from None
             except DefaultCredentialsError as exc:
                 error_msg = str(exc)
                 raise RuntimeError(
