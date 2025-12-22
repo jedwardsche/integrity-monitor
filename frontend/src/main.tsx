@@ -15,6 +15,7 @@ import { IssueDetailPage } from "./pages/IssueDetailPage";
 import { IssuesPage } from "./pages/IssuesPage";
 import { SchedulingPage } from "./pages/SchedulingPage";
 import { RulesPage } from "./pages/RulesPage";
+import { RuleDetailPage } from "./pages/RuleDetailPage";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -108,6 +109,16 @@ createRoot(document.getElementById("root")!).render(
               <AuthGuard>
                 <App>
                   <RulesPage />
+                </App>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/rules/:category/:entity?/:ruleId"
+            element={
+              <AuthGuard>
+                <App>
+                  <RuleDetailPage />
                 </App>
               </AuthGuard>
             }

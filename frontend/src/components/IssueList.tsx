@@ -452,7 +452,7 @@ export function IssueList({
                             className="text-[var(--text-muted)]"
                             title={`Entity: ${issue.entity} - No Airtable mapping configured`}
                           >
-                            {issue.record_id}
+                        {issue.record_id}
                           </span>
                         )}
                       </td>
@@ -466,26 +466,26 @@ export function IssueList({
                         >
                           <button
                             onClick={() => navigate(`/issue/${issue.id}`)}
-                            className="text-xs text-[var(--cta-blue)] hover:underline"
-                          >
-                            Open
+                              className="text-xs text-[var(--cta-blue)] hover:underline"
+                            >
+                              Open
                           </button>
                           {isAdmin && (
                             <>
-                              <button
+                            <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   initiateResolve(issue.id);
                                 }}
-                                disabled={
-                                  actionLoading && resolvingId === issue.id
-                                }
-                                className="text-xs text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-50"
-                              >
-                                {actionLoading && resolvingId === issue.id
-                                  ? "..."
-                                  : "Resolve"}
-                              </button>
+                              disabled={
+                                actionLoading && resolvingId === issue.id
+                              }
+                              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-50"
+                            >
+                              {actionLoading && resolvingId === issue.id
+                                ? "..."
+                                : "Resolve"}
+                            </button>
                               <button
                                 onClick={() => initiateDelete(issue.id)}
                                 disabled={deletingId === issue.id}

@@ -9,10 +9,6 @@ import { chartToImage } from "../utils/chartToImage";
 import jsPDF from "jspdf";
 import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
 
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ||
-  window.location.origin;
-
 const RUNS_PER_PAGE = 25;
 
 export function ReportsPage() {
@@ -25,7 +21,6 @@ export function ReportsPage() {
   } = useFirestoreMetrics(7);
   const integrityMetrics = useIntegrityMetrics();
   const trendChartRef = useRef<HTMLDivElement>(null);
-  const [downloading, setDownloading] = useState(false);
   const [downloadingRunId, setDownloadingRunId] = useState<string | null>(null);
   const [downloadingTrendReport, setDownloadingTrendReport] = useState(false);
   const [downloadingDashboardReport, setDownloadingDashboardReport] =
@@ -75,37 +70,6 @@ export function ReportsPage() {
       setCurrentPage(1);
     }
   }, [totalPages, currentPage]);
-
-  const handleDownloadParams = async () => {
-    try {
-      setDownloading(true);
-      const token = localStorage.getItem("auth_token"); // Simple auth for now
-      const response = await fetch(`${API_BASE}/integrity/export/params`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) throw new Error("Download failed");
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `integrity-params-${new Date()
-        .toISOString()
-        .slice(0, 10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (err) {
-      console.error("Export failed:", err);
-      alert("Failed to download report");
-    } finally {
-      setDownloading(false);
-    }
-  };
 
   const handleDownloadRunReport = async (
     run: RunHistoryItem,
@@ -368,9 +332,7 @@ export function ReportsPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleDownloadTrendReport}
-            disabled={
-              downloadingTrendReport || trendsLoading || trends.length === 0
-            }
+            disabled={true}
             className="inline-flex items-center gap-2 px-4 py-2 border border-[var(--brand)] text-sm font-medium rounded-md text-[var(--brand)] bg-white hover:bg-[var(--brand)]/5 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--brand)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg
@@ -410,18 +372,15 @@ export function ReportsPage() {
               ? "Generating..."
               : "Full Dashboard Report"}
           </button>
-          <button
-            onClick={handleDownloadParams}
-            disabled={downloading}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-          >
-            {downloading ? "Downloading..." : "Export Parameters"}
-          </button>
         </div>
       </div>
 
       {/* Trend Graph */}
-      <div className="bg-white shadow rounded-lg p-6" ref={trendChartRef}>
+      <div
+        className="bg-white shadow rounded-lg p-6"
+        ref={trendChartRef}
+        data-chart-ref
+      >
         <h2 className="text-lg font-medium text-gray-900 mb-4">
           7-Day Issue Trend
         </h2>

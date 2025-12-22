@@ -392,10 +392,10 @@ function computeNextRunAt(frequency, timeOfDay, timezone, daysOfWeek, intervalMi
         
         // Next run is start time + (intervalsPassed + 1) * intervalMinutes
         nextRun = startTimeToday.plus({ minutes: (intervalsPassed + 1) * intervalMinutes });
-        
+      
         // Safety check: if next run is in the past (shouldn't happen, but just in case)
-        if (nextRun <= tz) {
-          nextRun = nextRun.plus({ minutes: intervalMinutes });
+      if (nextRun <= tz) {
+        nextRun = nextRun.plus({ minutes: intervalMinutes });
         }
       }
     }

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Request, status, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
@@ -114,6 +115,24 @@ except: pass
 # #endregion agent log
 
 logger.info("FastAPI application startup complete")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log validation errors for debugging."""
+    logger.error(
+        "Request validation error",
+        extra={
+            "url": str(request.url),
+            "method": request.method,
+            "errors": exc.errors(),
+            "body": await request.body() if request.method in ["POST", "PUT", "PATCH"] else None,
+        },
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors(), "body": exc.body},
+    )
 
 
 @app.on_event("startup")
@@ -1310,8 +1329,8 @@ def get_airtable_records_by_ids(request: Request, body: RecordsByIdsRequest):
 @app.get("/rules", dependencies=[Depends(verify_firebase_token)])
 def get_all_rules(request: Request):
     """Get all rules merged from YAML and Firestore."""
+    request_id = getattr(request.state, "request_id", None)
     try:
-        request_id = getattr(request.state, "request_id", None)
         firestore_client = None
         if runner:
             firestore_client = runner._firestore_client
@@ -1328,13 +1347,20 @@ def get_all_rules(request: Request):
     except Exception as exc:
         logger.error(
             "Failed to get rules",
-            extra={"error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            extra={"error": str(exc), "request_id": request_id},
             exc_info=True,
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "Failed to get rules", "message": str(exc)},
-        )
+        # Return empty structure instead of raising to prevent frontend hang
+        return {
+            "duplicates": {},
+            "relationships": {},
+            "required_fields": {},
+            "attendance_rules": {
+                "onboarding_grace_days": 7,
+                "limited_schedule_threshold": 3,
+                "thresholds": {},
+            },
+        }
 
 
 @app.get("/rules/{category}", dependencies=[Depends(verify_firebase_token)])
@@ -1544,19 +1570,28 @@ class ParseRuleRequest(BaseModel):
 
 
 @app.post("/rules/ai-parse", dependencies=[Depends(verify_firebase_token)])
-def parse_rule_with_ai(request: Request, body: ParseRuleRequest):
+def parse_rule_with_ai(body: ParseRuleRequest, request: Request):
     """Parse natural language rule description into structured format."""
     try:
         request_id = getattr(request.state, "request_id", None)
-        
+
+        logger.info(
+            "AI parse request received",
+            extra={
+                "description_length": len(body.description) if body.description else 0,
+                "has_category_hint": body.category_hint is not None,
+                "request_id": request_id,
+            },
+        )
+
         parser = AIRuleParser()
         result = parser.parse(body.description, body.category_hint)
-        
+
         logger.info(
             "Parsed rule with AI",
             extra={"category": result.get("category"), "request_id": request_id},
         )
-        
+
         return result
     except HTTPException:
         raise

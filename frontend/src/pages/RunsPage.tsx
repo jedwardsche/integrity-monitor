@@ -7,6 +7,7 @@ import {
   type ScanConfig,
 } from "../components/ScanConfigModal";
 import { IssueList } from "../components/IssueList";
+import { Pagination } from "../components/Pagination";
 import { API_BASE } from "../config/api";
 import cancelButtonIcon from "../assets/cancel_button.svg";
 
@@ -661,8 +662,20 @@ export function RunsPage() {
           </p>
         </div>
       ) : (
-        <>
-          <div className="space-y-4">
+        <div className="bg-white border border-[var(--border)] rounded-xl p-6 space-y-4">
+          {/* Pagination Controls - Top */}
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredRuns.length}
+            itemsPerPage={RUNS_PER_PAGE}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            onPageChange={setCurrentPage}
+            itemLabel="runs"
+          />
+
+          <div className="space-y-2">
             {paginatedRuns.map((run) => {
               const isExpanded = expandedRun === run.id;
               const startTime =
@@ -970,74 +983,7 @@ export function RunsPage() {
               );
             })}
           </div>
-
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="bg-white border border-[var(--border)] rounded-xl p-4">
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-[var(--text-muted)]">
-                  Showing {startIndex + 1}-
-                  {Math.min(endIndex, filteredRuns.length)} of{" "}
-                  {filteredRuns.length}{" "}
-                  {filteredRuns.length === 1 ? "run" : "runs"}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setCurrentPage(1)}
-                    disabled={currentPage === 1}
-                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    First
-                  </button>
-                  <button
-                    onClick={() =>
-                      setCurrentPage((prev) => Math.max(1, prev - 1))
-                    }
-                    disabled={currentPage === 1}
-                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <div className="flex items-center gap-2 px-3">
-                    <span className="text-sm text-[var(--text-main)]">
-                      Page{" "}
-                      <input
-                        type="number"
-                        min={1}
-                        max={totalPages}
-                        value={currentPage}
-                        onChange={(e) => {
-                          const page = parseInt(e.target.value, 10);
-                          if (page >= 1 && page <= totalPages) {
-                            setCurrentPage(page);
-                          }
-                        }}
-                        className="w-16 px-2 py-1 text-center border border-[var(--border)] rounded-lg text-sm text-[var(--text-main)]"
-                      />{" "}
-                      of {totalPages}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() =>
-                      setCurrentPage((prev) => Math.min(totalPages, prev + 1))
-                    }
-                    disabled={currentPage === totalPages}
-                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                  <button
-                    onClick={() => setCurrentPage(totalPages)}
-                    disabled={currentPage === totalPages}
-                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Last
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </>
+        </div>
       )}
 
       {/* Scan configuration modal */}
