@@ -8,6 +8,7 @@ export interface RunStatus {
   status: "running" | "success" | "error" | "warning";
   started_at?: any;
   ended_at?: any;
+  cancelled_at?: any;
   duration_ms?: number;
   mode?: string;
   trigger?: string;

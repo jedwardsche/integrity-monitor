@@ -174,6 +174,12 @@ export function RunStatusPage() {
                 setIsCancelling(true);
                 try {
                   const token = await getToken();
+                  if (!token) {
+                    alert("Authentication required. Please sign in again.");
+                    setIsCancelling(false);
+                    return;
+                  }
+
                   const response = await fetch(
                     `${API_BASE}/integrity/run/${runId}/cancel`,
                     {
@@ -184,20 +190,32 @@ export function RunStatusPage() {
                       },
                     }
                   );
+
                   if (!response.ok) {
-                    const errorData = await response
-                      .json()
-                      .catch(() => ({ error: "Failed to cancel run" }));
-                    throw new Error(
+                    let errorData;
+                    try {
+                      errorData = await response.json();
+                    } catch {
+                      errorData = {
+                        error: `Server returned ${response.status}: ${response.statusText}`,
+                      };
+                    }
+
+                    const errorMessage =
                       errorData.detail?.error ||
-                        errorData.error ||
-                        "Failed to cancel run"
-                    );
+                      errorData.detail?.message ||
+                      errorData.error ||
+                      errorData.message ||
+                      `Failed to cancel run (${response.status})`;
+
+                    throw new Error(errorMessage);
                   }
+
                   // Status will update via real-time subscription
                 } catch (error) {
                   console.error("Failed to cancel run:", error);
                   let errorMessage = "Failed to cancel run. Please try again.";
+
                   if (
                     error instanceof TypeError &&
                     error.message.includes("fetch")
@@ -207,6 +225,7 @@ export function RunStatusPage() {
                   } else if (error instanceof Error) {
                     errorMessage = error.message;
                   }
+
                   alert(errorMessage);
                 } finally {
                   setIsCancelling(false);
@@ -236,19 +255,21 @@ export function RunStatusPage() {
               {getStatusLabel(runStatus.status)}
             </span>
           </div>
-          <div className="text-sm text-[var(--text-muted)]">
-            {startTime.toLocaleString()}
+          <div className="text-sm text-[var(--text-muted)] text-right">
+            <div>Started: {startTime.toLocaleString()}</div>
+            {(statusLower === "cancelled" || statusLower === "canceled") &&
+              runStatus.cancelled_at && (
+                <div className="text-xs mt-1">
+                  Cancelled:{" "}
+                  {runStatus.cancelled_at?.toDate?.()?.toLocaleString() ||
+                    new Date(runStatus.cancelled_at).toLocaleString()}
+                </div>
+              )}
           </div>
         </div>
 
         {/* Progress Info */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div>
-            <div className="text-xs text-[var(--text-muted)] mb-1">Mode</div>
-            <div className="font-medium text-[var(--text-main)]">
-              {runStatus.mode === "full" ? "Full Scan" : "Incremental"}
-            </div>
-          </div>
           <div>
             <div className="text-xs text-[var(--text-muted)] mb-1">Trigger</div>
             <div className="font-medium text-[var(--text-main)]">
@@ -581,19 +602,41 @@ export function RunStatusPage() {
       </div>
 
       {/* Issues from This Run */}
-      {!isRunning && runStatus.ended_at && runId && (
-        <div className="rounded-2xl border border-[var(--border)] bg-white p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2
-              className="text-lg font-semibold text-[var(--text-main)]"
-              style={{ fontFamily: "Outfit" }}
-            >
-              Issues from This Run
-            </h2>
-          </div>
-          <IssueList filters={{ run_id: runId }} />
-        </div>
-      )}
+      {(!isRunning ||
+        statusLower === "cancelled" ||
+        statusLower === "canceled") &&
+        runId && (
+          <>
+            <div className="rounded-2xl border border-[var(--border)] bg-white p-6 mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2
+                  className="text-lg font-semibold text-[var(--text-main)]"
+                  style={{ fontFamily: "Outfit" }}
+                >
+                  New Issues from This Run
+                </h2>
+              </div>
+              <IssueList
+                filters={{
+                  run_id: runId,
+                  first_seen_in_run: runId,
+                  status: "all",
+                }}
+              />
+            </div>
+            <div className="rounded-2xl border border-[var(--border)] bg-white p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2
+                  className="text-lg font-semibold text-[var(--text-main)]"
+                  style={{ fontFamily: "Outfit" }}
+                >
+                  Issues from This Run
+                </h2>
+              </div>
+              <IssueList filters={{ run_id: runId, status: "all" }} />
+            </div>
+          </>
+        )}
     </div>
   );
 }

@@ -309,13 +309,27 @@ class IntegrityMetricsService:
             + attendance_health * 0.2
         )
         
+        # Apply critical issue penalty to reflect actual issue severity
+        # Critical issues should significantly impact health score
+        if total_records > 0 and critical_count > 0:
+            # Calculate critical issue rate as percentage
+            critical_rate = (critical_count / total_records) * 100
+            # Apply penalty: scale critical rate by 2.5x, cap at 70% penalty
+            # This ensures that high critical issue volumes (e.g., 20,000 critical issues)
+            # result in significantly lower health scores
+            critical_penalty = min(70, critical_rate * 2.5)
+            # Adjust health by subtracting penalty
+            adjusted_health = max(0, base_health - critical_penalty)
+        else:
+            adjusted_health = base_health
+        
         return {
             "critical_records": critical_count,
             "duplicate_rate": round(duplicate_rate, 2),
             "link_health": round(link_health, 2),
             "data_completeness": round(completeness, 2),
             "attendance_health": round(attendance_health, 2),
-            "base_health": round(base_health, 2),
+            "base_health": round(adjusted_health, 2),
             "total_records": total_records,
         }
 

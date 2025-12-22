@@ -10,9 +10,7 @@ import { db } from "../config/firebase";
 
 export interface TrendDataItem {
   day: string;
-  duplicates: number;
-  links: number;
-  attendance: number;
+  [key: string]: number | string;
 }
 
 export interface SeverityCounts {
@@ -55,17 +53,58 @@ export function useFirestoreMetrics(days: number = 14) {
               date = new Date();
             }
 
-            // Extract counts by type
-            const duplicates = data.by_type?.duplicate || data.counts?.by_type?.duplicate || 0;
-            const links = data.by_type?.missing_link || data.counts?.by_type?.missing_link || 0;
-            const attendance = data.by_type?.attendance || data.counts?.by_type?.attendance || 0;
-
-            trendData.push({
+            const trendItem: TrendDataItem = {
               day: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-              duplicates,
-              links,
-              attendance,
+            };
+
+            // Extract counts by type - handle both structured (by_type) and flat (summary) formats
+            let byType: Record<string, number> = {};
+            
+            if (data.by_type) {
+              // Structured format: data.by_type exists
+              byType = data.by_type;
+            } else if (data.counts?.by_type) {
+              // Nested format: data.counts.by_type exists
+              byType = data.counts.by_type;
+            } else {
+              // Flat format: parse keys like "duplicate", "duplicate:critical", "missing_link:warning"
+              // Aggregate by issue type (ignore severity suffixes)
+              const typeCounts: Record<string, number> = {};
+              Object.entries(data).forEach(([key, value]) => {
+                // Skip non-numeric values and special keys
+                if (typeof value !== 'number' || key === 'date' || key === 'updated_at' || key === 'total') {
+                  return;
+                }
+                
+                // Parse key format: "issue_type" or "issue_type:severity"
+                const parts = key.split(':');
+                const issueType = parts[0];
+                
+                // Only count the base type (not severity-specific counts)
+                // This gives us total counts per issue type
+                if (parts.length === 1) {
+                  // Direct type count (e.g., "duplicate": 10)
+                  typeCounts[issueType] = (typeCounts[issueType] || 0) + value;
+                } else if (parts.length === 2 && parts[1] !== 'total') {
+                  // Type:severity format (e.g., "duplicate:critical": 5)
+                  // Aggregate all severities for the type
+                  typeCounts[issueType] = (typeCounts[issueType] || 0) + value;
+                }
+              });
+              byType = typeCounts;
+            }
+
+            // Add all issue types found in the data
+            Object.entries(byType).forEach(([type, count]) => {
+              if (typeof count === 'number' && count > 0) {
+                trendItem[type] = count;
+              }
             });
+
+            // Ensure common types exist for consistency if needed, but 0 is fine
+            // We rely on the graph to pick up keys
+
+            trendData.push(trendItem);
 
             // Use most recent document for severity counts
             if (snapshot.docs.indexOf(doc) === 0) {

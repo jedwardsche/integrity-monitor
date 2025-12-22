@@ -117,7 +117,7 @@ class IntegrityRunner:
         except: pass
         # #endregion agent log
 
-    def run(self, run_id: str | None = None, mode: str = "incremental", trigger: str = "manual", cancel_event=None, entities: List[str] | None = None) -> Dict[str, Any]:
+    def run(self, run_id: str | None = None, trigger: str = "manual", cancel_event=None, entities: List[str] | None = None) -> Dict[str, Any]:
         # Explicitly reference module-level time to avoid UnboundLocalError
         # (Python may treat time as local if used in nested scopes)
         import time as _time_module
@@ -133,7 +133,7 @@ class IntegrityRunner:
         status = "running"  # Start with "running" status
         error_message: str | None = None
 
-        logger.info("Integrity run started", extra={"run_id": run_id, "mode": mode, "trigger": trigger})
+        logger.info("Integrity run started", extra={"run_id": run_id, "trigger": trigger})
         
         # Store run_id for use in _fetch_records
         self._current_run_id = run_id
@@ -161,7 +161,7 @@ class IntegrityRunner:
         
         # Log to Firestore
         try:
-            self._firestore_writer.write_log(run_id, "info", f"Integrity run started (mode: {mode}, trigger: {trigger})")
+            self._firestore_writer.write_log(run_id, "info", f"Integrity run started (trigger: {trigger})")
         except Exception:
             pass  # Non-blocking
 
@@ -348,7 +348,6 @@ class IntegrityRunner:
         # Write initial "running" status to Firestore immediately so frontend can see it
         try:
             initial_metadata = {
-                "mode": mode,
                 "trigger": trigger,
                 "status": "running",
                 "started_at": start_time,
@@ -381,11 +380,11 @@ class IntegrityRunner:
             try:
                 entities_param = getattr(self, '_selected_entities', None)
                 if entities_param:
-                    self._firestore_writer.write_log(run_id, "info", f"Starting to fetch records (mode: {mode}, entities: {', '.join(entities_param)})...")
+                    self._firestore_writer.write_log(run_id, "info", f"Starting to fetch records (entities: {', '.join(entities_param)})...")
                 else:
-                    self._firestore_writer.write_log(run_id, "info", f"Starting to fetch records (mode: {mode})...")
+                    self._firestore_writer.write_log(run_id, "info", "Starting to fetch records...")
                 with timed("fetch", metrics):
-                    records, entity_counts = self._fetch_records(mode, entities_param)
+                    records, entity_counts = self._fetch_records(entities_param)
                 fetch_duration = metrics.get("duration_fetch", 0)
                 total_records = sum(entity_counts.values())
                 log_fetch(logger, run_id, entity_counts, fetch_duration)
@@ -537,7 +536,6 @@ class IntegrityRunner:
                         status = result_status
                     
                     run_metadata = {
-                        "mode": mode,
                         "trigger": trigger,
                         "entity_counts": entity_counts,
                         "status": status,
@@ -578,15 +576,16 @@ class IntegrityRunner:
                             )
                     
                     # Write individual issues to Firestore
+                    new_issues_count = 0
                     if issues:
                         check_cancelled()  # Check before starting long write operation
                         try:
                             self._firestore_writer.write_log(run_id, "info", f"Writing {len(merged):,} issues to Firestore...")
                             with timed("write_issues_firestore", metrics):
-                                self._firestore_writer.write_issues(merged if issues else [], run_id=run_id)
+                                new_issues_count = self._firestore_writer.write_issues(merged if issues else [], run_id=run_id)
                             write_issues_duration = metrics.get("duration_write_issues_firestore", 0)
                             log_write(logger, run_id, "firestore_issues", len(merged) if issues else 0, write_issues_duration)
-                            self._firestore_writer.write_log(run_id, "info", f"Wrote {len(merged):,} issues to Firestore in {(write_issues_duration/1000):.1f}s")
+                            self._firestore_writer.write_log(run_id, "info", f"Wrote {len(merged):,} issues to Firestore ({new_issues_count:,} new) in {(write_issues_duration/1000):.1f}s")
                         except Exception as exc:
                             logger.error("Failed to write issues to Firestore", extra={"run_id": run_id}, exc_info=True)
                             try:
@@ -639,7 +638,6 @@ class IntegrityRunner:
             # Still try to write status to Firestore
             try:
                 run_metadata = {
-                    "mode": mode,
                     "status": status,
                     "started_at": start_time,
                     "ended_at": datetime.now(timezone.utc),
@@ -661,7 +659,6 @@ class IntegrityRunner:
             # Still try to write status to Firestore
             try:
                 run_metadata = {
-                    "mode": mode,
                     "status": status,
                     "started_at": start_time,
                     "ended_at": datetime.now(timezone.utc),
@@ -701,6 +698,9 @@ class IntegrityRunner:
                     final_metadata["error_message"] = error_message
                 if failed_checks:
                     final_metadata["failed_checks"] = failed_checks
+                # Include new_issues_count if it was captured
+                if "new_issues_count" in locals():
+                    final_metadata["new_issues_count"] = new_issues_count
                 # Write summary (will only update counts if summary has content, preserving existing counts if empty)
                 self._firestore_writer.write_run(run_id, summary, final_metadata)
             except Exception:
@@ -711,7 +711,6 @@ class IntegrityRunner:
             extra={
                 "run_id": run_id,
                 "stage": "complete",
-                "mode": mode,
                 "trigger": trigger,
                 "status": status,
                 "duration_ms": elapsed_ms,
@@ -734,25 +733,13 @@ class IntegrityRunner:
 
         return result
 
-    def _fetch_records(self, mode: str, entities: List[str] | None = None) -> Tuple[Dict[str, List[dict]], Dict[str, int]]:
-        """Fetch records, optionally using incremental mode based on last successful run.
+    def _fetch_records(self, entities: List[str] | None = None) -> Tuple[Dict[str, List[dict]], Dict[str, int]]:
+        """Fetch records for the specified entities.
         
         Args:
-            mode: Scan mode ("incremental" or "full")
             entities: Optional list of entity names to fetch. If None, fetches all entities.
         """
-        incremental_since = None
-        if mode == "incremental":
-            incremental_since = self._firestore_client.get_last_successful_run_timestamp()
-            if incremental_since:
-                logger.info(
-                    "Using incremental fetch",
-                    extra={"since": incremental_since.isoformat()},
-                )
-            else:
-                logger.info("No previous successful run found, performing full scan")
-        else:
-            logger.info("Performing full scan (mode=full)")
+        logger.info("Performing full scan")
         
         fetchers = build_fetchers(self._airtable_client)
         
@@ -778,7 +765,7 @@ class IntegrityRunner:
                     except Exception:
                         pass
                 
-                data = fetcher.fetch(incremental_since=incremental_since)
+                data = fetcher.fetch()
                 records[key] = data
                 counts[key] = len(data)
                 

@@ -3,7 +3,6 @@ metadata:
   generated: "2025-11-19"
 
 run_config:
-  incremental_default: true
   nightly_cron: "0 2 * * *"
   weekly_cron: "0 3 * * 0"
   alert_thresholds:

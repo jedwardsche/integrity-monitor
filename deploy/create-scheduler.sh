@@ -35,7 +35,7 @@ echo "Creating nightly job..."
 gcloud scheduler jobs create http integrity-nightly \
     --location=${REGION} \
     --schedule="0 2 * * *" \
-    --uri="${SERVICE_URL}/integrity/run?mode=incremental" \
+    --uri="${SERVICE_URL}/integrity/run" \
     --http-method=POST \
     --oidc-service-account-email=${INVOKER_SA} \
     --oidc-token-audience=${SERVICE_URL} \
@@ -47,11 +47,11 @@ gcloud scheduler jobs create http integrity-nightly \
     --time-zone="America/New_York" \
     --headers="X-CloudScheduler-Source=nightly" \
     --project=${PROJECT_ID} \
-    --description="Nightly incremental integrity scan" \
+    --description="Nightly integrity scan" \
     2>/dev/null || gcloud scheduler jobs update http integrity-nightly \
     --location=${REGION} \
     --schedule="0 2 * * *" \
-    --uri="${SERVICE_URL}/integrity/run?mode=incremental" \
+    --uri="${SERVICE_URL}/integrity/run" \
     --http-method=POST \
     --oidc-service-account-email=${INVOKER_SA} \
     --oidc-token-audience=${SERVICE_URL} \

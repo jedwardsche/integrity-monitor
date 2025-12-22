@@ -3,6 +3,7 @@ const {getAuth} = require("firebase-admin/auth");
 const {getFirestore, Timestamp} = require("firebase-admin/firestore");
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
+const {onDocumentUpdated} = require("firebase-functions/v2/firestore");
 const {setGlobalOptions} = require("firebase-functions");
 const {defineSecret} = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
@@ -246,11 +247,9 @@ exports.runScheduledScans = onSchedule(
           });
 
           // Trigger the backend run
-          const mode = runConfig.mode || "incremental";
           const entities = runConfig.entities || [];
 
           const params = new URLSearchParams({
-            mode: mode,
             trigger: "schedule",
           });
 
@@ -261,7 +260,7 @@ exports.runScheduledScans = onSchedule(
           }
 
           const url = `${INTEGRITY_RUNNER_URL}/integrity/run?${params.toString()}`;
-          logger.info(`Triggering run for schedule ${scheduleId}`, { url, mode, entities });
+          logger.info(`Triggering run for schedule ${scheduleId}`, { url, entities });
 
           let runId = null;
           try {
@@ -377,30 +376,27 @@ function computeNextRunAt(frequency, timeOfDay, timezone, daysOfWeek, intervalMi
       // For subsequent runs, increment from previous time
       nextRun = tz.plus({ minutes: intervalMinutes });
     } else {
-      // For initial calculation, calculate next run as now + intervalMinutes (rounded up to next interval)
-      const currentMinutes = tz.minute;
-      const currentSeconds = tz.second;
-      const totalCurrentSeconds = currentMinutes * 60 + currentSeconds;
+      // For initial calculation, use time_of_day as the starting point
+      // Then calculate how many intervals have passed since that time today
+      const [startHours, startMinutes] = timeOfDay.split(":").map(Number);
+      const startTimeToday = tz.set({ hour: startHours, minute: startMinutes, second: 0, millisecond: 0 });
       
-      // Calculate how many intervals have passed
-      const intervalsPassed = Math.floor(totalCurrentSeconds / (intervalMinutes * 60));
-      
-      // Next interval is (intervalsPassed + 1) * intervalMinutes minutes
-      const nextIntervalMinutes = (intervalsPassed + 1) * intervalMinutes;
-      
-      if (nextIntervalMinutes >= 60) {
-        // Next interval is in the next hour
-        nextRun = tz
-          .plus({ hours: 1 })
-          .set({ minute: nextIntervalMinutes - 60, second: 0, millisecond: 0 });
+      // If start time hasn't passed today, use it
+      if (startTimeToday > tz) {
+        nextRun = startTimeToday;
       } else {
-        // Next interval is in current hour
-        nextRun = tz.set({ minute: nextIntervalMinutes, second: 0, millisecond: 0 });
-      }
-      
-      // Safety check: if next run is in the past, add one more interval
-      if (nextRun <= tz) {
-        nextRun = nextRun.plus({ minutes: intervalMinutes });
+        // Start time has passed, calculate next interval
+        // Find how many intervals have passed since start time
+        const minutesSinceStart = tz.diff(startTimeToday, "minutes").minutes;
+        const intervalsPassed = Math.floor(minutesSinceStart / intervalMinutes);
+        
+        // Next run is start time + (intervalsPassed + 1) * intervalMinutes
+        nextRun = startTimeToday.plus({ minutes: (intervalsPassed + 1) * intervalMinutes });
+        
+        // Safety check: if next run is in the past (shouldn't happen, but just in case)
+        if (nextRun <= tz) {
+          nextRun = nextRun.plus({ minutes: intervalMinutes });
+        }
       }
     }
   } else if (frequency === "custom_times" && timesOfDay && timesOfDay.length > 0) {
@@ -463,3 +459,131 @@ function computeNextRunAt(frequency, timeOfDay, timezone, daysOfWeek, intervalMi
   // Convert to Firestore Timestamp
   return Timestamp.fromDate(nextRun.toJSDate());
 }
+
+/**
+ * Scheduled function that checks for completed runs and updates schedule_executions status.
+ * Runs every 2 minutes to check for runs that have completed but executions are still "started".
+ * This avoids needing Eventarc permissions for Firestore triggers.
+ */
+exports.updateScheduleExecutionStatus = onSchedule(
+  {
+    schedule: "every 2 minutes",
+    timeZone: "UTC",
+    memory: "128MiB",
+    timeoutSeconds: 60,
+  },
+  async (event) => {
+    const now = Timestamp.now();
+    logger.info("Checking for completed runs to update execution status", {
+      timestamp: now.toDate().toISOString(),
+    });
+
+    try {
+      // Find executions with status "started" that have a run_id
+      const executionsRef = db.collection("schedule_executions");
+      const startedExecutionsQuery = executionsRef
+        .where("status", "==", "started")
+        .where("run_id", "!=", null)
+        .limit(50);
+
+      const executionsSnapshot = await startedExecutionsQuery.get();
+
+      if (executionsSnapshot.empty) {
+        logger.info("No started executions found to update");
+        return;
+      }
+
+      logger.info(`Found ${executionsSnapshot.size} started execution(s) to check`);
+
+      // Get all run_ids
+      const runIds = executionsSnapshot.docs
+        .map((doc) => doc.data().run_id)
+        .filter((id) => id != null);
+
+      if (runIds.length === 0) {
+        return;
+      }
+
+      // Check each run's status
+      const runsRef = db.collection("integrity_runs");
+      const updates = [];
+
+      for (const executionDoc of executionsSnapshot.docs) {
+        const executionData = executionDoc.data();
+        const runId = executionData.run_id;
+
+        if (!runId) continue;
+
+        try {
+          const runDoc = await runsRef.doc(runId).get();
+
+          if (!runDoc.exists) {
+            logger.debug(`Run ${runId} not found, skipping`);
+            continue;
+          }
+
+          const runData = runDoc.data();
+          const runStatus = runData?.status;
+
+          // Only update if run is no longer "running"
+          if (runStatus && runStatus !== "running") {
+            const updateData = {
+              status:
+                runStatus === "success" || runStatus === "healthy"
+                  ? "completed"
+                  : "error",
+              completed_at: runData.ended_at || Timestamp.now(),
+            };
+
+            // Add error details if the run failed
+            if (runStatus === "error" || runStatus === "failed") {
+              updateData.error = {
+                message: runData.error_message || "Run failed",
+                code: "RUN_ERROR",
+              };
+            }
+
+            updates.push({
+              executionId: executionDoc.id,
+              runId,
+              updateData,
+              runStatus,
+            });
+          }
+        } catch (error) {
+          logger.error(`Error checking run ${runId}`, {
+            error: error.message,
+            executionId: executionDoc.id,
+          });
+        }
+      }
+
+      // Batch update all executions
+      if (updates.length > 0) {
+        const batch = db.batch();
+
+        for (const update of updates) {
+          const executionRef = executionsRef.doc(update.executionId);
+          batch.update(executionRef, update.updateData);
+        }
+
+        await batch.commit();
+
+        logger.info(`Updated ${updates.length} execution(s)`, {
+          updates: updates.map((u) => ({
+            executionId: u.executionId,
+            runId: u.runId,
+            status: u.updateData.status,
+          })),
+        });
+      } else {
+        logger.info("No executions needed updating");
+      }
+    } catch (error) {
+      logger.error("Error updating execution statuses", {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  }
+);

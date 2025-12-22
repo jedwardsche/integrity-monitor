@@ -3,7 +3,6 @@ import { useAuth } from "../hooks/useAuth";
 import type { AirtableSchema, AirtableTable } from "../utils/airtable";
 
 export interface ScanConfig {
-  mode: "incremental" | "full";
   checks: {
     duplicates: boolean;
     links: boolean;
@@ -43,7 +42,6 @@ export function ScanConfigModal({
   onConfirm,
   onCancel,
 }: ScanConfigModalProps) {
-  const [mode, setMode] = useState<"incremental" | "full">("incremental");
   const [checks, setChecks] = useState({
     duplicates: true,
     links: true,
@@ -169,7 +167,6 @@ export function ScanConfigModal({
 
   const handleConfirm = () => {
     onConfirm({
-      mode,
       checks,
       entities:
         selectedEntities.size > 0 ? Array.from(selectedEntities) : undefined,
@@ -198,55 +195,6 @@ export function ScanConfigModal({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Left Column */}
           <div className="space-y-6">
-            {/* Mode Selection */}
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-main)] mb-3">
-                Scan Mode
-              </label>
-              <div className="space-y-2">
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="incremental"
-                    checked={mode === "incremental"}
-                    onChange={(e) =>
-                      setMode(e.target.value as "incremental" | "full")
-                    }
-                    className="mr-3"
-                  />
-                  <div className="flex-1">
-                    <div className="font-medium text-[var(--text-main)]">
-                      Incremental Scan
-                    </div>
-                    <div className="text-sm text-[var(--text-muted)]">
-                      Only scan records modified since the last successful run
-                    </div>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="full"
-                    checked={mode === "full"}
-                    onChange={(e) =>
-                      setMode(e.target.value as "incremental" | "full")
-                    }
-                    className="mr-3"
-                  />
-                  <div className="flex-1">
-                    <div className="font-medium text-[var(--text-main)]">
-                      Full Scan
-                    </div>
-                    <div className="text-sm text-[var(--text-muted)]">
-                      Scan all records regardless of modification time
-                    </div>
-                  </div>
-                </label>
-              </div>
-            </div>
-
             {/* Check Types Selection */}
             <div>
               <label className="block text-sm font-medium text-[var(--text-main)] mb-3">

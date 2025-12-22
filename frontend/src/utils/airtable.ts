@@ -57,7 +57,7 @@ export function getAirtableLinkByEntity(entity: string, recordId: string): strin
   }
 
   const entityLower = entity.toLowerCase();
-  
+
   // Map singular to plural for entity names
   // Backend uses singular (student, parent, contractor) but mappings use plural
   const entityMapping: Record<string, string> = {
@@ -97,7 +97,7 @@ export function getAirtableLinkByEntity(entity: string, recordId: string): strin
   if (hasValidBaseId && hasValidTableId) {
     // If we have a recordId, generate record link; otherwise return table link as fallback
     if (recordId && recordId.trim().length > 0) {
-      return getAirtableRecordLink(baseId, tableId, recordId);
+  return getAirtableRecordLink(baseId, tableId, recordId);
     }
     // Fallback to table link when recordId is missing or invalid
     return getAirtableTableLink(baseId, tableId);
@@ -133,16 +133,6 @@ export function getDataIssuesLink(filters?: Record<string, string>): string {
   }
 
   return url;
-}
-
-/**
- * Generate a link to an Airtable table (base/table, without record).
- * @param baseId - Airtable base ID
- * @param tableId - Airtable table ID
- * @returns URL to the table in Airtable
- */
-function getAirtableTableLink(baseId: string, tableId: string): string {
-  return `https://airtable.com/${baseId}/${tableId}`;
 }
 
 /**
@@ -194,16 +184,84 @@ function getSharedBaseId(): string {
  */
 export function getAirtableLinksWithFallback(
   entity: string,
-  recordId: string
+  recordId: string,
+  schema?: AirtableSchema | null
 ): { primary: string } {
   // Normalize entity name (singular → plural) for consistent mapping lookups
   const normalizedEntity = normalizeEntityName(entity);
-  
+
   // Get shared base ID (all entities use the same base)
-  const sharedBaseId = getSharedBaseId();
-  
+  let sharedBaseId = getSharedBaseId();
+
   // Get entity-specific table ID using normalized entity name
-  const entityTableId = TABLE_MAPPINGS[normalizedEntity];
+  let entityTableId = TABLE_MAPPINGS[normalizedEntity];
+
+  // If no env var mapping, try to find in schema
+  if (!isValidId(entityTableId) && schema?.tables) {
+    // Try multiple matching strategies for better accuracy
+    let table = schema.tables.find(
+      (t) => normalizeEntityName(t.name) === normalizedEntity
+    );
+
+    // If not found, try simple lowercase match
+    if (!table) {
+      table = schema.tables.find(
+        (t) => t.name.toLowerCase().trim() === entity.toLowerCase().trim()
+      );
+    }
+
+    // If still not found, try more specific matching based on entity type
+    if (!table) {
+      const entityLower = entity.toLowerCase().trim();
+      table = schema.tables.find((t) => {
+        const tableNameLower = t.name.toLowerCase().trim();
+        // Strict matching: only match if table name clearly matches the entity
+        if (normalizedEntity === "contractors" || entityLower === "contractor") {
+          // For contractors, only match if table name contains "contractor" or "volunteer"
+          return (
+            tableNameLower.includes("contractor") ||
+            tableNameLower.includes("volunteer")
+          ) && !tableNameLower.includes("student");
+        } else if (normalizedEntity === "students" || entityLower === "student") {
+          // For students, only match if table name contains "student" but not "contractor"
+          return (
+            tableNameLower.includes("student") &&
+            !tableNameLower.includes("contractor")
+          );
+        } else if (normalizedEntity === "parents" || entityLower === "parent") {
+          // For parents, only match if table name contains "parent" or "guardian"
+          return (
+            tableNameLower.includes("parent") ||
+            tableNameLower.includes("guardian")
+          ) && !tableNameLower.includes("student");
+        }
+        // For other entities, try exact or close match
+        return (
+          tableNameLower === normalizedEntity ||
+          tableNameLower === entityLower
+        );
+      });
+    }
+
+    if (table) {
+      // Double-check that the found table actually matches our entity
+      const tableNameLower = table.name.toLowerCase().trim();
+      const isCorrectMatch = 
+        normalizeEntityName(table.name) === normalizedEntity ||
+        tableNameLower === entity.toLowerCase().trim() ||
+        (normalizedEntity === "contractors" && (tableNameLower.includes("contractor") || tableNameLower.includes("volunteer")) && !tableNameLower.includes("student")) ||
+        (normalizedEntity === "students" && tableNameLower.includes("student") && !tableNameLower.includes("contractor")) ||
+        (normalizedEntity === "parents" && (tableNameLower.includes("parent") || tableNameLower.includes("guardian")) && !tableNameLower.includes("student"));
+      
+      if (isCorrectMatch) {
+        entityTableId = table.id;
+        // Use schema base ID if we don't have one from env vars (though likely we do)
+        if (!isValidId(sharedBaseId) && schema.baseId) {
+          sharedBaseId = schema.baseId;
+        }
+      }
+    }
+  }
 
   // If no record ID, fallback to table link or generic URL
   if (!recordId || recordId.trim() === "") {
@@ -219,6 +277,10 @@ export function getAirtableLinksWithFallback(
         }
       }
     }
+    // If schema is available, try first table from schema
+    if (schema?.baseId && schema.tables.length > 0) {
+      return { primary: getAirtableTableLink(schema.baseId, schema.tables[0].id) };
+    }
     return { primary: `https://airtable.com` };
   }
 
@@ -227,45 +289,35 @@ export function getAirtableLinksWithFallback(
     return { primary: getAirtableRecordLink(sharedBaseId, entityTableId, recordId) };
   }
 
-  // Fallback: try all available mappings systematically for record links
-  // First try preferred fallback entities
-  const fallbackOrder = ["students", "data_issues", "parents", "contractors"];
-  for (const fallbackEntity of fallbackOrder) {
-    const baseId = BASE_MAPPINGS[fallbackEntity];
-    const tableId = TABLE_MAPPINGS[fallbackEntity];
-    if (isValidId(baseId) && isValidId(tableId)) {
-      return { primary: getAirtableRecordLink(baseId, tableId, recordId) };
-    }
-  }
-
-  // If no preferred mappings found, try any available mapping from BASE_MAPPINGS for record link
-  for (const [entityKey, baseId] of Object.entries(BASE_MAPPINGS)) {
-    if (isValidId(baseId)) {
-      const tableId = TABLE_MAPPINGS[entityKey];
-      if (isValidId(tableId)) {
-        return { primary: getAirtableRecordLink(baseId, tableId, recordId) };
-      }
-    }
-  }
-
-  // Fallback to table links: try entity-specific table link
+  // If entity-specific mapping not found, don't fall back to other entity tables
+  // This prevents contractor records from opening in students table, etc.
+  // If we have a specific entity but can't find its table, fall back to entity-specific table link only
   if (isValidId(sharedBaseId) && isValidId(entityTableId)) {
     return { primary: getAirtableTableLink(sharedBaseId, entityTableId) };
   }
 
-  // Try any available base/table combination for table link
-  for (const [entityKey, baseId] of Object.entries(BASE_MAPPINGS)) {
-    if (isValidId(baseId)) {
-      const tableId = TABLE_MAPPINGS[entityKey];
-      if (isValidId(tableId)) {
-        return { primary: getAirtableTableLink(baseId, tableId) };
-      }
+  // If we have a specific entity but couldn't find its table, don't use other entity tables
+  // Only fall back to generic links if entity is truly unknown or empty
+  if (entity && entity.trim() && normalizedEntity) {
+    // We have a specific entity but no table mapping - return generic URL rather than wrong table
+    if (isValidId(sharedBaseId)) {
+      return { primary: `https://airtable.com/${sharedBaseId}` };
     }
+    return { primary: `https://airtable.com` };
+  }
+
+  // Try schema for table link
+  if (schema?.baseId && schema.tables.length > 0) {
+    return { primary: getAirtableTableLink(schema.baseId, schema.tables[0].id) };
   }
 
   // Last resort: if we have at least a base, link to it
   if (isValidId(sharedBaseId)) {
     return { primary: `https://airtable.com/${sharedBaseId}` };
+  }
+
+  if (schema?.baseId) {
+    return { primary: `https://airtable.com/${schema.baseId}` };
   }
 
   // Ultimate fallback: generic Airtable URL

@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, Fragment, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Timestamp, deleteField } from "firebase/firestore";
 import { useFirestoreScheduleGroups } from "../hooks/useFirestoreScheduleGroups";
@@ -7,6 +7,10 @@ import { useFirestoreScheduleExecutions } from "../hooks/useFirestoreScheduleExe
 import { useAuth } from "../hooks/useAuth";
 import { useRunStatus } from "../hooks/useRunStatus";
 import ConfirmModal from "../components/ConfirmModal";
+import arrowLeftIcon from "../assets/keyboard_arrow_left.svg";
+import arrowRightIcon from "../assets/keyboard_arrow_right.svg";
+import doubleArrowLeftIcon from "../assets/keyboard_double_arrow_left.svg";
+import doubleArrowRightIcon from "../assets/keyboard_double_arrow_right.svg";
 
 const ENTITY_TABLE_MAPPING: Record<string, string> = {
   students: "Students",
@@ -40,10 +44,11 @@ function computeNextRunAt(
   timezone: string,
   daysOfWeek?: number[],
   intervalMinutes?: number,
-  timesOfDay?: string[]
+  timesOfDay?: string[],
+  baseDate?: Date
 ): Timestamp {
   const [hours, minutes] = timeOfDay.split(":").map(Number);
-  const now = new Date();
+  const now = baseDate || new Date();
 
   // Get today's date in target timezone (accounts for DST automatically)
   const todayParts = new Intl.DateTimeFormat("en-US", {
@@ -125,7 +130,10 @@ function computeNextRunAt(
     );
 
     // Next interval is (intervalsPassed + 1) * intervalMinutes minutes
-    const nextIntervalMinutes = (intervalsPassed + 1) * intervalMinutes;
+    // If baseDate is provided, we want the next interval after the base date
+    const nextIntervalMinutes = baseDate
+      ? (intervalsPassed + 1) * intervalMinutes
+      : (intervalsPassed + 1) * intervalMinutes;
 
     // Create date for next interval in target timezone
     let nextIntervalLocal: Date;
@@ -156,7 +164,7 @@ function computeNextRunAt(
     // Convert to UTC
     nextRun = new Date(nextIntervalLocal.getTime() + offset);
 
-    // Safety check: if next run is in the past, add one more interval
+    // Safety check: if next run is in the past (or same as base), add one more interval
     if (nextRun <= now) {
       nextRun = new Date(nextRun.getTime() + intervalMinutes * 60 * 1000);
     }
@@ -165,7 +173,7 @@ function computeNextRunAt(
     timesOfDay &&
     timesOfDay.length > 0
   ) {
-    // For custom_times, find the next time from the array that hasn't passed today
+    // For custom_times, find the next time from the array that hasn't passed
     const sortedTimes = [...timesOfDay].sort();
     const nowInTz = new Date(now.getTime() - offset);
     const currentTimeStr = `${String(nowInTz.getHours()).padStart(
@@ -173,7 +181,7 @@ function computeNextRunAt(
       "0"
     )}:${String(nowInTz.getMinutes()).padStart(2, "0")}`;
 
-    // Find next time today
+    // Find next time today (or same day if baseDate is provided)
     let nextTimeStr = sortedTimes.find((time) => time > currentTimeStr);
 
     if (!nextTimeStr) {
@@ -209,6 +217,51 @@ function computeNextRunAt(
         0
       );
       nextRun = new Date(targetLocal.getTime() + offset);
+    }
+
+    // If baseDate is provided and next run is same as or before base, get next occurrence
+    if (baseDate && nextRun <= baseDate) {
+      // Find the next time after the base date
+      const baseInTz = new Date(baseDate.getTime() - offset);
+      const baseTimeStr = `${String(baseInTz.getHours()).padStart(
+        2,
+        "0"
+      )}:${String(baseInTz.getMinutes()).padStart(2, "0")}`;
+      nextTimeStr = sortedTimes.find((time) => time > baseTimeStr);
+
+      if (!nextTimeStr) {
+        // Next day
+        nextTimeStr = sortedTimes[0];
+        const nextDayLocal = new Date(
+          parseInt(nowTz.year),
+          parseInt(nowTz.month) - 1,
+          parseInt(nowTz.day) + 1,
+          0,
+          0,
+          0
+        );
+        const [hours, minutes] = nextTimeStr.split(":").map(Number);
+        const targetLocal = new Date(
+          nextDayLocal.getFullYear(),
+          nextDayLocal.getMonth(),
+          nextDayLocal.getDate(),
+          hours,
+          minutes,
+          0
+        );
+        nextRun = new Date(targetLocal.getTime() + offset);
+      } else {
+        const [hours, minutes] = nextTimeStr.split(":").map(Number);
+        const targetLocal = new Date(
+          parseInt(nowTz.year),
+          parseInt(nowTz.month) - 1,
+          parseInt(nowTz.day),
+          hours,
+          minutes,
+          0
+        );
+        nextRun = new Date(targetLocal.getTime() + offset);
+      }
     }
   } else if (frequency === "daily") {
     // Check if the calculated time has already passed
@@ -253,6 +306,192 @@ function computeNextRunAt(
   return Timestamp.fromDate(nextRun);
 }
 
+function computeNextRuns(
+  schedule: {
+    frequency: "daily" | "weekly" | "hourly" | "custom_times";
+    time_of_day: string;
+    timezone: string;
+    days_of_week?: number[];
+    interval_minutes?: number;
+    times_of_day?: string[];
+    next_run_at?: Timestamp;
+  },
+  count: number = 10
+): Date[] {
+  const runs: Date[] = [];
+  let currentBase: Date | undefined = schedule.next_run_at?.toDate();
+
+  for (let i = 0; i < count; i++) {
+    try {
+      const nextRunTimestamp = computeNextRunAt(
+        schedule.frequency,
+        schedule.time_of_day,
+        schedule.timezone,
+        schedule.days_of_week,
+        schedule.interval_minutes,
+        schedule.times_of_day,
+        currentBase
+      );
+      const nextRunDate = nextRunTimestamp.toDate();
+      runs.push(nextRunDate);
+      // For next iteration, use the calculated date as base
+      // Add a small offset to ensure we get the next occurrence
+      currentBase = new Date(nextRunDate.getTime() + 1000);
+    } catch (error) {
+      console.error("Error computing next run:", error);
+      break;
+    }
+  }
+
+  return runs;
+}
+
+function NextRunTooltip({
+  schedule,
+  children,
+}: {
+  schedule: {
+    frequency: "daily" | "weekly" | "hourly" | "custom_times";
+    time_of_day: string;
+    timezone: string;
+    days_of_week?: number[];
+    interval_minutes?: number;
+    times_of_day?: string[];
+    next_run_at?: Timestamp;
+  };
+  children: React.ReactNode;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [futureRuns, setFutureRuns] = useState<Date[]>([]);
+  const [mousePosition, setMousePosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{
+    top?: number;
+    bottom?: number;
+    left?: number;
+  }>({});
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
+  // Track mouse position
+  const handleMouseMove = (e: React.MouseEvent) => {
+    setMousePosition({ x: e.clientX, y: e.clientY });
+  };
+
+  useEffect(() => {
+    if (isHovered && schedule.next_run_at) {
+      try {
+        const runs = computeNextRuns(schedule, 10);
+        setFutureRuns(runs);
+      } catch (error) {
+        console.error("Error computing future runs:", error);
+        setFutureRuns([]);
+      }
+    }
+  }, [isHovered, schedule]);
+
+  useEffect(() => {
+    if (isHovered && mousePosition && tooltipRef.current) {
+      requestAnimationFrame(() => {
+        if (!tooltipRef.current || !mousePosition) return;
+
+        const tooltipRect = tooltipRef.current.getBoundingClientRect();
+        const viewportHeight = window.innerHeight;
+        const viewportWidth = window.innerWidth;
+        const padding = 8;
+        const cursorOffset = 12;
+
+        // Default: position above cursor
+        let top: number | undefined;
+        let bottom: number | undefined = viewportHeight - mousePosition.y + cursorOffset;
+        let left: number | undefined = mousePosition.x;
+
+        // Check if tooltip would go above viewport
+        if (bottom + tooltipRect.height > viewportHeight - padding) {
+          // Position below cursor instead
+          bottom = undefined;
+          top = mousePosition.y + cursorOffset;
+        }
+
+        // Check if tooltip would go right of viewport
+        if (left + tooltipRect.width > viewportWidth - padding) {
+          left = viewportWidth - tooltipRect.width - padding;
+        }
+
+        // Ensure it doesn't go left of viewport
+        if (left < padding) {
+          left = padding;
+        }
+
+        setTooltipPosition({
+          ...(top !== undefined && { top }),
+          ...(bottom !== undefined && { bottom }),
+          ...(left !== undefined && { left }),
+        });
+      });
+    } else {
+      setTooltipPosition({});
+      setMousePosition(null);
+    }
+  }, [isHovered, mousePosition]);
+
+  const displayTimezone =
+    schedule.timezone === "America/Los_Angeles"
+      ? "America/Denver"
+      : schedule.timezone;
+
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => {
+        setIsHovered(false);
+        setMousePosition(null);
+      }}
+      onMouseMove={handleMouseMove}
+    >
+      <span className="cursor-help underline decoration-dotted">
+        {children}
+      </span>
+      {isHovered && futureRuns.length > 0 && (
+        <div
+          ref={tooltipRef}
+          className="fixed z-[200] w-64 bg-white border border-[var(--border)] rounded-lg shadow-xl p-3 max-h-96 overflow-y-auto"
+          style={{
+            top: tooltipPosition.top,
+            bottom: tooltipPosition.bottom,
+            left: tooltipPosition.left,
+          }}
+        >
+          <div className="text-xs font-semibold text-[var(--text-main)] mb-2 pb-2 border-b border-[var(--border)]">
+            Next 10 Runs
+          </div>
+          <div className="space-y-1.5">
+            {futureRuns.map((runDate, index) => (
+              <div
+                key={index}
+                className="text-xs text-[var(--text-muted)] py-1"
+              >
+                {runDate.toLocaleString("en-US", {
+                  timeZone: displayTimezone,
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                  hour12: true,
+                  timeZoneName: "short",
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SchedulingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -293,7 +532,6 @@ export function SchedulingPage() {
     days_of_week: [] as number[],
     interval_minutes: undefined as number | undefined,
     times_of_day: undefined as string[] | undefined,
-    mode: "incremental" as "incremental" | "full",
     entities: [] as string[],
     stop_condition_type: "none" as "none" | "max_runs" | "stop_at",
     max_runs: undefined as number | undefined,
@@ -354,9 +592,7 @@ export function SchedulingPage() {
         timezone: scheduleForm.timezone,
         frequency: scheduleForm.frequency,
         time_of_day: scheduleForm.time_of_day,
-        run_config: {
-          mode: scheduleForm.mode,
-        },
+        run_config: {},
         next_run_at: nextRunAt,
       };
 
@@ -403,7 +639,6 @@ export function SchedulingPage() {
         days_of_week: [],
         interval_minutes: undefined,
         times_of_day: undefined,
-        mode: "incremental",
         entities: [],
         stop_condition_type: "none",
         max_runs: undefined,
@@ -441,9 +676,7 @@ export function SchedulingPage() {
         timezone: scheduleForm.timezone,
         frequency: scheduleForm.frequency,
         time_of_day: scheduleForm.time_of_day,
-        run_config: {
-          mode: scheduleForm.mode,
-        },
+        run_config: {},
         next_run_at: nextRunAt,
       };
 
@@ -505,7 +738,6 @@ export function SchedulingPage() {
         days_of_week: [],
         interval_minutes: undefined,
         times_of_day: undefined,
-        mode: "incremental",
         entities: [],
         stop_condition_type: "none",
         max_runs: undefined,
@@ -586,7 +818,6 @@ export function SchedulingPage() {
       days_of_week: schedule.days_of_week || [],
       interval_minutes: schedule.interval_minutes,
       times_of_day: schedule.times_of_day,
-      mode: schedule.run_config.mode,
       entities: schedule.run_config.entities || [],
       stop_condition_type: stopConditionType,
       max_runs: maxRuns,
@@ -708,7 +939,6 @@ export function SchedulingPage() {
                   days_of_week: [],
                   interval_minutes: undefined,
                   times_of_day: undefined,
-                  mode: "incremental",
                   entities: [],
                   stop_condition_type: "none",
                   max_runs: undefined,
@@ -796,8 +1026,9 @@ export function SchedulingPage() {
                           : "Unknown"}
                       </td>
                       <td className="py-3 px-4 text-sm text-[var(--text-main)]">
-                        {schedule.next_run_at
-                          ? (() => {
+                        {schedule.next_run_at ? (
+                          <NextRunTooltip schedule={schedule}>
+                            {(() => {
                               // Use the Firebase value directly - convert Timestamp to Date
                               const nextRunDate = schedule.next_run_at.toDate();
                               // Display in the schedule's configured timezone
@@ -816,22 +1047,20 @@ export function SchedulingPage() {
                                 hour12: true,
                                 timeZoneName: "short",
                               });
-                            })()
-                          : "N/A"}
+                            })()}
+                          </NextRunTooltip>
+                        ) : (
+                          "N/A"
+                        )}
                       </td>
                       <td className="py-3 px-4 text-sm text-[var(--text-main)]">
-                        <div>
-                          {schedule.run_config.mode === "full"
-                            ? "Full Scan"
-                            : "Incremental"}
-                        </div>
                         {schedule.run_config.entities &&
                           schedule.run_config.entities.length > 0 && (
                             <div className="text-xs text-[var(--text-muted)] mt-1">
-                              {schedule.run_config.entities.length} entity
-                              {schedule.run_config.entities.length !== 1
-                                ? "ies"
-                                : "y"}
+                              {schedule.run_config.entities.length}{" "}
+                              {schedule.run_config.entities.length === 1
+                                ? "entity"
+                                : "entities"}
                             </div>
                           )}
                       </td>
@@ -988,7 +1217,6 @@ export function SchedulingPage() {
               days_of_week: [],
               interval_minutes: undefined,
               times_of_day: undefined,
-              mode: "incremental",
               entities: [],
               stop_condition_type: "none",
               max_runs: undefined,
@@ -1030,13 +1258,32 @@ export function SchedulingPage() {
 }
 
 function ScheduleExecutions({ scheduleId }: { scheduleId: string }) {
-  const { data: executions, loading } =
-    useFirestoreScheduleExecutions(scheduleId);
+  const {
+    data: executions,
+    loading,
+    error,
+    hasMore,
+    hasPrev,
+    currentPage,
+    nextPage,
+    prevPage,
+    goToPage,
+    goToLastPage,
+    totalCount,
+    totalPages,
+  } = useFirestoreScheduleExecutions(scheduleId);
   const navigate = useNavigate();
+  const [pageInput, setPageInput] = useState("");
 
-  if (loading) {
+  if (loading && executions.length === 0) {
     return (
       <div className="text-[var(--text-muted)] py-2">Loading executions...</div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-red-600 py-2">Error loading executions: {error}</div>
     );
   }
 
@@ -1050,9 +1297,16 @@ function ScheduleExecutions({ scheduleId }: { scheduleId: string }) {
 
   return (
     <div className="mt-2">
-      <h4 className="text-sm font-semibold text-[var(--text-main)] mb-2">
-        Recent Executions
-      </h4>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-sm font-semibold text-[var(--text-main)]">
+          Executions
+        </h4>
+        {totalCount !== null && (
+          <div className="text-xs text-[var(--text-muted)]">
+            {executions.length} shown · {totalCount} total
+          </div>
+        )}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -1079,6 +1333,120 @@ function ScheduleExecutions({ scheduleId }: { scheduleId: string }) {
           </tbody>
         </table>
       </div>
+      {/* Pagination Controls */}
+      {!loading && executions.length > 0 && (
+        <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t border-[var(--border)]">
+          <button
+            onClick={() => goToPage(1)}
+            disabled={currentPage === 1 || loading}
+            className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+              currentPage === 1 || loading
+                ? "cursor-not-allowed opacity-40"
+                : ""
+            }`}
+            title="First page"
+          >
+            <img
+              src={doubleArrowLeftIcon}
+              alt="First"
+              className="w-5 h-5"
+              style={{
+                filter:
+                  "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+              }}
+            />
+          </button>
+          <button
+            onClick={prevPage}
+            disabled={!hasPrev || loading}
+            className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+              !hasPrev || loading ? "cursor-not-allowed opacity-40" : ""
+            }`}
+            title="Previous page"
+          >
+            <img
+              src={arrowLeftIcon}
+              alt="Previous"
+              className="w-5 h-5"
+              style={{
+                filter:
+                  "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+              }}
+            />
+          </button>
+          <div className="flex items-center gap-1 mx-1">
+            <span className="text-[var(--text-muted)] text-xs">Page</span>
+            <input
+              type="number"
+              min={1}
+              max={totalPages || undefined}
+              value={pageInput !== "" ? pageInput : currentPage}
+              onChange={(e) => setPageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const page = parseInt(pageInput, 10);
+                  if (
+                    !isNaN(page) &&
+                    page >= 1 &&
+                    (totalPages === null || page <= totalPages)
+                  ) {
+                    goToPage(page, totalPages || undefined);
+                    setPageInput("");
+                  }
+                }
+              }}
+              onBlur={() => setPageInput("")}
+              className="w-14 rounded-lg border border-[var(--text-main)] px-2 py-1 text-sm text-center text-[var(--text-main)]"
+            />
+            {totalPages !== null && (
+              <span className="text-[var(--text-muted)] text-xs">
+                of {totalPages}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={nextPage}
+            disabled={!hasMore || loading}
+            className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+              !hasMore || loading ? "cursor-not-allowed opacity-40" : ""
+            }`}
+            title="Next page"
+          >
+            <img
+              src={arrowRightIcon}
+              alt="Next"
+              className="w-5 h-5"
+              style={{
+                filter:
+                  "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+              }}
+            />
+          </button>
+          {totalPages !== null && (
+            <button
+              onClick={() => goToLastPage(totalPages)}
+              disabled={currentPage === totalPages || !hasMore || loading}
+              className={`rounded-lg border border-[var(--text-main)] p-1.5 hover:bg-[var(--bg-mid)] ${
+                currentPage === totalPages || !hasMore || loading
+                  ? "cursor-not-allowed opacity-40"
+                  : ""
+              }`}
+              title="Last page"
+            >
+              <img
+                src={doubleArrowRightIcon}
+                alt="Last"
+                className="w-5 h-5"
+                style={{
+                  filter:
+                    "brightness(0) saturate(100%) invert(12%) sepia(30%) saturate(1200%) hue-rotate(140deg) brightness(0.31) contrast(1.2)",
+                }}
+              />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1206,7 +1574,6 @@ function CreateScheduleModal({
     days_of_week: number[];
     interval_minutes?: number;
     times_of_day?: string[];
-    mode: "incremental" | "full";
     entities: string[];
     stop_condition_type: "none" | "max_runs" | "stop_at";
     max_runs?: number;
@@ -1287,7 +1654,7 @@ function CreateScheduleModal({
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 className="w-full px-3 py-2 border border-[var(--border)] rounded-lg bg-white text-[var(--text-main)]"
-                placeholder="e.g., Nightly Incremental Scan"
+                placeholder="e.g., Nightly Scan"
                 required
               />
             </div>
@@ -1599,57 +1966,6 @@ function CreateScheduleModal({
           </div>
 
           <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
-                Run Mode
-              </label>
-              <div className="space-y-2">
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="incremental"
-                    checked={form.mode === "incremental"}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        mode: e.target.value as "incremental",
-                      })
-                    }
-                    className="mr-3"
-                  />
-                  <div>
-                    <div className="font-medium text-[var(--text-main)]">
-                      Incremental
-                    </div>
-                    <div className="text-xs text-[var(--text-muted)]">
-                      Only scan records modified since last run
-                    </div>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="full"
-                    checked={form.mode === "full"}
-                    onChange={(e) =>
-                      setForm({ ...form, mode: e.target.value as "full" })
-                    }
-                    className="mr-3"
-                  />
-                  <div>
-                    <div className="font-medium text-[var(--text-main)]">
-                      Full
-                    </div>
-                    <div className="text-xs text-[var(--text-muted)]">
-                      Scan all records regardless of modification time
-                    </div>
-                  </div>
-                </label>
-              </div>
-            </div>
-
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="block text-sm font-medium text-[var(--text-main)]">

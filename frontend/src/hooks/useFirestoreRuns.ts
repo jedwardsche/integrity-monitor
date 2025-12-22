@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
+import { collection, query, orderBy, limit, onSnapshot, where, getCountFromServer } from "firebase/firestore";
 import { db } from "../config/firebase";
 
 export interface RunHistoryItem {
@@ -12,7 +12,6 @@ export interface RunHistoryItem {
   run_id?: string;
   started_at?: any;
   ended_at?: any;
-  mode?: string;
   duration_ms?: number;
   counts?: {
     total?: number;
@@ -38,14 +37,16 @@ export function useFirestoreRuns(limitCount: number = 10) {
         try {
           const transformed: RunHistoryItem[] = snapshot.docs.map((doc) => {
             const data = doc.data();
-            const runTime = data.started_at?.toDate?.() || data.ended_at?.toDate?.() || new Date();
+            // Always use started_at for date display, never fall back to ended_at
+            // This ensures the displayed date is always the original start time, not the cancellation time
+            const runTime = data.started_at?.toDate?.() || new Date();
             const date = runTime instanceof Date ? runTime : new Date(runTime);
             const timeStr = `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })} • ${date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`;
 
             return {
               id: doc.id,
               run_id: doc.id,
-              trigger: data.trigger || (data.mode === "full" ? "weekly" : "nightly"),
+              trigger: data.trigger || "nightly",
               time: timeStr,
               anomalies: data.counts?.total || 0,
               status: (() => {
@@ -63,11 +64,40 @@ export function useFirestoreRuns(limitCount: number = 10) {
                 : "N/A",
               started_at: data.started_at,
               ended_at: data.ended_at,
-              mode: data.mode,
               duration_ms: data.duration_ms,
               counts: data.counts,
             };
           });
+          
+          // Sort by started_at descending to ensure stable order (by date, not status)
+          // This prevents reordering when status changes
+          transformed.sort((a, b) => {
+            // Get started_at timestamp only (never use ended_at for sorting)
+            const getTimestamp = (run: RunHistoryItem): number => {
+              if (run.started_at) {
+                const date = run.started_at?.toDate?.() || run.started_at;
+                if (date instanceof Date) return date.getTime();
+                if (typeof date === 'number') return date;
+                try {
+                  return new Date(date).getTime();
+                } catch {
+                  return 0;
+                }
+              }
+              return 0;
+            };
+            
+            const aTime = getTimestamp(a);
+            const bTime = getTimestamp(b);
+            
+            // If timestamps are equal, use ID as tiebreaker for stable sort
+            if (aTime === bTime) {
+              return (b.id || '').localeCompare(a.id || '');
+            }
+            
+            return bTime - aTime; // Descending order (newest first)
+          });
+          
           setRuns(transformed);
           setLoading(false);
           setError(null);
@@ -110,5 +140,82 @@ export function useFirestoreRuns(limitCount: number = 10) {
   }, [limitCount, retryCount]);
 
   return { data: runs, loading, error };
+}
+
+export function useNewIssuesFromRecentRuns(limitCount: number = 3) {
+  const [count, setCount] = useState<number>(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const { data: runs, loading: runsLoading } = useFirestoreRuns(limitCount);
+
+  useEffect(() => {
+    if (runsLoading || runs.length === 0) {
+      setLoading(runsLoading);
+      return;
+    }
+
+    const fetchNewIssuesCount = async () => {
+      try {
+        setLoading(true);
+        const issuesRef = collection(db, "integrity_issues");
+        
+        // Get run IDs from the last N runs
+        const runIds = runs.slice(0, limitCount).map(run => run.id || run.run_id).filter(Boolean);
+        
+        if (runIds.length === 0) {
+          setCount(0);
+          setLoading(false);
+          return;
+        }
+
+        // Build query with OR conditions for first_seen_in_run matching any run ID
+        // Firestore requires using 'in' operator for up to 10 values, or multiple queries
+        if (runIds.length <= 10) {
+          const q = query(
+            issuesRef,
+            where("first_seen_in_run", "in", runIds)
+          );
+          const snapshot = await getCountFromServer(q);
+          setCount(snapshot.data().count);
+        } else {
+          // If more than 10 runs, query in batches
+          let totalCount = 0;
+          for (let i = 0; i < runIds.length; i += 10) {
+            const batch = runIds.slice(i, i + 10);
+            const q = query(
+              issuesRef,
+              where("first_seen_in_run", "in", batch)
+            );
+            const snapshot = await getCountFromServer(q);
+            totalCount += snapshot.data().count;
+          }
+          setCount(totalCount);
+        }
+        
+        setError(null);
+      } catch (err: any) {
+        const errorCode = err.code;
+        let userMessage = err.message;
+
+        if (errorCode === "permission-denied") {
+          userMessage = "Access denied. Please check your permissions.";
+        } else if (errorCode === "resource-exhausted") {
+          userMessage = "Quota exceeded. Please try again later.";
+        } else if (errorCode === "unavailable" || errorCode === "deadline-exceeded") {
+          userMessage = "Service temporarily unavailable. Please try again.";
+        }
+
+        console.error("Error fetching new issues count:", errorCode, err.message);
+        setError(userMessage);
+        setCount(0);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchNewIssuesCount();
+  }, [runs, runsLoading, limitCount]);
+
+  return { count, loading, error };
 }
 

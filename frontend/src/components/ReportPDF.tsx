@@ -174,12 +174,6 @@ export function ReportPDF({
               </View>
             </View>
             <View style={styles.summaryBox}>
-              <Text style={styles.summaryLabel}>Mode</Text>
-              <Text style={styles.summaryValue}>
-                {run.mode === "full" ? "Full Scan" : "Incremental"}
-              </Text>
-            </View>
-            <View style={styles.summaryBox}>
               <Text style={styles.summaryLabel}>Total Issues</Text>
               <Text style={styles.summaryValue}>
                 {run.anomalies.toLocaleString()}
