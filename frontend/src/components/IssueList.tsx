@@ -53,6 +53,7 @@ export function IssueList({
     initialFilters?.entity,
     initialFilters?.status,
     initialFilters?.run_id,
+    initialFilters?.first_seen_in_run,
   ]);
 
   // Get counts for total pages calculation

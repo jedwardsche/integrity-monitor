@@ -25,6 +25,8 @@ from .services.airtable_schema_service import schema_service
 from .services.integrity_metrics_service import get_metrics_service
 from .services.table_id_discovery import discover_table_ids, validate_discovered_ids
 from .services.config_updater import update_config
+from .services.rules_service import RulesService
+from .services.ai_rule_parser import AIRuleParser
 from .utils.errors import IntegrityRunError
 
 logger = logging.getLogger(__name__)
@@ -898,6 +900,173 @@ def delete_integrity_issue(issue_id: str, request: Request):
         )
 
 
+@app.delete("/integrity/issues/bulk", dependencies=[Depends(verify_firebase_token)])
+def bulk_delete_issues(
+    request: Request,
+    date_range: str = Query(...),  # past_hour, past_day, past_week, custom, all
+    issue_types: Optional[List[str]] = Query(None),
+    entities: Optional[List[str]] = Query(None),
+    custom_start_date: Optional[str] = Query(None),
+    custom_end_date: Optional[str] = Query(None),
+):
+    """Bulk delete integrity issues from Firestore based on filters.
+    
+    Args:
+        issue_types: Optional list of issue types to filter by (e.g., ["duplicate", "missing_link"])
+        entities: Optional list of entities to filter by (e.g., ["students", "contractors"])
+        date_range: Date range filter (past_hour, past_day, past_week, custom, all)
+        custom_start_date: Start date for custom range (ISO format, required if date_range=custom)
+        custom_end_date: End date for custom range (ISO format, required if date_range=custom)
+        request: FastAPI request object (injected)
+    
+    Returns:
+        - 200: Success with deleted count
+        - 400: Invalid parameters
+        - 500: Server error
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.info(
+        "Bulk delete issues requested",
+        extra={
+            "issue_types": issue_types,
+            "entities": entities,
+            "date_range": date_range,
+            "request_id": request_id,
+        }
+    )
+    
+    try:
+        from .clients.firestore import FirestoreClient
+        from .config.config_loader import load_runtime_config
+        from datetime import datetime, timedelta, timezone
+        
+        config = load_runtime_config()
+        firestore_client = FirestoreClient(config.firestore)
+        client = firestore_client._get_client()
+        issues_ref = client.collection(config.firestore.issues_collection)
+        
+        # Build base query with date filter
+        query = issues_ref
+        
+        # Date range filter
+        if date_range == "all":
+            # No date filter - query all issues
+            pass
+        elif date_range == "past_hour":
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            query = query.where("created_at", ">=", cutoff)
+        elif date_range == "past_day":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            query = query.where("created_at", ">=", cutoff)
+        elif date_range == "past_week":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            query = query.where("created_at", ">=", cutoff)
+        elif date_range == "custom":
+            if not custom_start_date or not custom_end_date:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": "custom_start_date and custom_end_date required for custom date range"},
+                )
+            try:
+                start_date = datetime.fromisoformat(custom_start_date.replace("Z", "+00:00"))
+                end_date = datetime.fromisoformat(custom_end_date.replace("Z", "+00:00"))
+                query = query.where("created_at", ">=", start_date).where("created_at", "<=", end_date)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": f"Invalid date format: {str(e)}"},
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"Invalid date_range: {date_range}"},
+            )
+        
+        # Fetch all documents matching date filter, then filter client-side for types/entities (OR logic)
+        # Firestore doesn't support OR queries natively across different fields
+        all_docs = query.stream()
+        
+        deleted_count = 0
+        batch = client.batch()
+        batch_count = 0
+        
+        # Filter client-side for issue_types and entities (OR logic)
+        # If no type/entity filters and date_range is "all", delete all documents
+        has_type_filter = issue_types and len(issue_types) > 0
+        has_entity_filter = entities and len(entities) > 0
+        
+        for doc in all_docs:
+            data = doc.to_dict()
+            matches = False
+            
+            # If no type/entity filters, match all (delete everything matching date filter)
+            if not has_type_filter and not has_entity_filter:
+                matches = True
+            else:
+                # OR logic: match if issue_type in selected types OR entity in selected entities
+                if has_type_filter and data.get("issue_type") in issue_types:
+                    matches = True
+                if has_entity_filter and data.get("entity") in entities:
+                    matches = True
+            
+            if matches:
+                batch.delete(doc.reference)
+                batch_count += 1
+                deleted_count += 1
+                
+                # Firestore batch limit is 500 operations
+                if batch_count >= 500:
+                    batch.commit()
+                    batch = client.batch()
+                    batch_count = 0
+        
+        # Delete in batches of 500
+        for doc in docs_to_delete:
+            batch.delete(doc.reference)
+            batch_count += 1
+            deleted_count += 1
+            
+            if batch_count >= 500:
+                batch.commit()
+                batch = client.batch()
+                batch_count = 0
+        
+        # Commit remaining deletions
+        if batch_count > 0:
+            batch.commit()
+        
+        logger.info(
+            "Bulk delete completed",
+            extra={
+                "deleted_count": deleted_count,
+                "filters": {
+                    "issue_types": issue_types,
+                    "entities": entities,
+                    "date_range": date_range,
+                },
+                "request_id": request_id,
+            }
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Deleted {deleted_count} issues",
+            "deleted_count": deleted_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to bulk delete issues",
+            extra={"error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to bulk delete issues", "message": str(exc)},
+        )
+
+
 @app.get("/integrity/metrics/kpi")
 def integrity_metrics_kpi(weeks: int = 8):
     """Return KPI measurement data and trend.
@@ -1133,4 +1302,271 @@ def get_airtable_records_by_ids(request: Request, body: RecordsByIdsRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "Failed to fetch records", "message": str(exc)},
+        )
+
+
+# Rules Management API Endpoints
+
+@app.get("/rules", dependencies=[Depends(verify_firebase_token)])
+def get_all_rules(request: Request):
+    """Get all rules merged from YAML and Firestore."""
+    try:
+        request_id = getattr(request.state, "request_id", None)
+        firestore_client = None
+        if runner:
+            firestore_client = runner._firestore_client
+        
+        rules_service = RulesService(firestore_client)
+        rules = rules_service.get_all_rules()
+        
+        logger.info(
+            "Retrieved all rules",
+            extra={"request_id": request_id},
+        )
+        
+        return rules
+    except Exception as exc:
+        logger.error(
+            "Failed to get rules",
+            extra={"error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to get rules", "message": str(exc)},
+        )
+
+
+@app.get("/rules/{category}", dependencies=[Depends(verify_firebase_token)])
+def get_rules_by_category(category: str, request: Request):
+    """Get rules for a specific category."""
+    try:
+        request_id = getattr(request.state, "request_id", None)
+        
+        valid_categories = ["duplicates", "relationships", "required_fields", "attendance_rules"]
+        if category not in valid_categories:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid category. Must be one of: {', '.join(valid_categories)}",
+            )
+        
+        firestore_client = None
+        if runner:
+            firestore_client = runner._firestore_client
+        
+        rules_service = RulesService(firestore_client)
+        rules = rules_service.get_rules_by_category(category)
+        
+        logger.info(
+            "Retrieved rules by category",
+            extra={"category": category, "request_id": request_id},
+        )
+        
+        return rules
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to get rules by category",
+            extra={"category": category, "error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to get rules", "message": str(exc)},
+        )
+
+
+class CreateRuleRequest(BaseModel):
+    """Request body for creating a rule."""
+    entity: Optional[str] = None
+    rule_data: dict
+
+
+@app.post("/rules/{category}", dependencies=[Depends(verify_firebase_token)])
+def create_rule(
+    category: str,
+    request: Request,
+    body: CreateRuleRequest,
+):
+    """Create a new rule in the specified category."""
+    try:
+        request_id = getattr(request.state, "request_id", None)
+        
+        valid_categories = ["duplicates", "relationships", "required_fields", "attendance_rules"]
+        if category not in valid_categories:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid category. Must be one of: {', '.join(valid_categories)}",
+            )
+        
+        # Get user ID from token if available
+        user_id = None
+        # TODO: Extract user_id from Firebase token if needed
+        
+        firestore_client = None
+        if runner:
+            firestore_client = runner._firestore_client
+        
+        rules_service = RulesService(firestore_client)
+        created_rule = rules_service.create_rule(category, body.entity, body.rule_data, user_id)
+        
+        logger.info(
+            "Created rule",
+            extra={"category": category, "entity": body.entity, "request_id": request_id},
+        )
+        
+        return {"success": True, "rule": created_rule}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(
+            "Failed to create rule",
+            extra={"category": category, "error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to create rule", "message": str(exc)},
+        )
+
+
+class UpdateRuleRequest(BaseModel):
+    """Request body for updating a rule."""
+    entity: Optional[str] = None
+    rule_data: dict
+
+
+@app.put("/rules/{category}/{rule_id}", dependencies=[Depends(verify_firebase_token)])
+def update_rule(
+    category: str,
+    rule_id: str,
+    request: Request,
+    body: UpdateRuleRequest,
+):
+    """Update an existing rule."""
+    try:
+        request_id = getattr(request.state, "request_id", None)
+        
+        valid_categories = ["duplicates", "relationships", "required_fields", "attendance_rules"]
+        if category not in valid_categories:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid category. Must be one of: {', '.join(valid_categories)}",
+            )
+        
+        user_id = None
+        
+        firestore_client = None
+        if runner:
+            firestore_client = runner._firestore_client
+        
+        rules_service = RulesService(firestore_client)
+        updated_rule = rules_service.update_rule(category, body.entity, rule_id, body.rule_data, user_id)
+        
+        logger.info(
+            "Updated rule",
+            extra={"category": category, "rule_id": rule_id, "request_id": request_id},
+        )
+        
+        return {"success": True, "rule": updated_rule}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(
+            "Failed to update rule",
+            extra={"category": category, "rule_id": rule_id, "error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to update rule", "message": str(exc)},
+        )
+
+
+@app.delete("/rules/{category}/{rule_id}", dependencies=[Depends(verify_firebase_token)])
+def delete_rule(
+    category: str,
+    rule_id: str,
+    request: Request,
+    entity: Optional[str] = Query(None),
+):
+    """Delete a rule."""
+    try:
+        request_id = getattr(request.state, "request_id", None)
+        
+        valid_categories = ["duplicates", "relationships", "required_fields", "attendance_rules"]
+        if category not in valid_categories:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid category. Must be one of: {', '.join(valid_categories)}",
+            )
+        
+        user_id = None
+        
+        firestore_client = None
+        if runner:
+            firestore_client = runner._firestore_client
+        
+        rules_service = RulesService(firestore_client)
+        rules_service.delete_rule(category, entity, rule_id, user_id)
+        
+        logger.info(
+            "Deleted rule",
+            extra={"category": category, "rule_id": rule_id, "request_id": request_id},
+        )
+        
+        return {"success": True, "message": f"Rule {rule_id} deleted"}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(
+            "Failed to delete rule",
+            extra={"category": category, "rule_id": rule_id, "error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to delete rule", "message": str(exc)},
+        )
+
+
+class ParseRuleRequest(BaseModel):
+    """Request body for parsing a rule with AI."""
+    description: str
+    category_hint: Optional[str] = None
+
+
+@app.post("/rules/ai-parse", dependencies=[Depends(verify_firebase_token)])
+def parse_rule_with_ai(request: Request, body: ParseRuleRequest):
+    """Parse natural language rule description into structured format."""
+    try:
+        request_id = getattr(request.state, "request_id", None)
+        
+        parser = AIRuleParser()
+        result = parser.parse(body.description, body.category_hint)
+        
+        logger.info(
+            "Parsed rule with AI",
+            extra={"category": result.get("category"), "request_id": request_id},
+        )
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to parse rule with AI",
+            extra={"error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to parse rule", "message": str(exc)},
         )

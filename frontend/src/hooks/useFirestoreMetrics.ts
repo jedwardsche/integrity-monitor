@@ -76,7 +76,7 @@ export function useFirestoreMetrics(days: number = 14) {
                   return;
                 }
                 
-                // Parse key format: "issue_type" or "issue_type:severity"
+                // Parse key format: "issue_type", "issue_type:severity", or "issue_type:total"
                 const parts = key.split(':');
                 const issueType = parts[0];
                 
@@ -85,10 +85,17 @@ export function useFirestoreMetrics(days: number = 14) {
                 if (parts.length === 1) {
                   // Direct type count (e.g., "duplicate": 10)
                   typeCounts[issueType] = (typeCounts[issueType] || 0) + value;
-                } else if (parts.length === 2 && parts[1] !== 'total') {
-                  // Type:severity format (e.g., "duplicate:critical": 5)
-                  // Aggregate all severities for the type
-                  typeCounts[issueType] = (typeCounts[issueType] || 0) + value;
+                } else if (parts.length === 2) {
+                  // Type:severity or type:total format (e.g., "duplicate:critical": 5, "attendance:total": 10)
+                  // For :total keys, use the value directly (it's already the total)
+                  // For :severity keys, aggregate all severities for the type
+                  if (parts[1] === 'total') {
+                    // Use the total value directly (don't aggregate with severity counts)
+                    typeCounts[issueType] = value;
+                  } else {
+                    // Aggregate severity counts for the type
+                    typeCounts[issueType] = (typeCounts[issueType] || 0) + value;
+                  }
                 }
               });
               byType = typeCounts;

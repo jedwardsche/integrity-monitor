@@ -90,10 +90,87 @@ export function useIssueActions() {
     }
   };
 
+  const bulkDeleteIssues = async (filters: {
+    issueTypes?: string[];
+    entities?: string[];
+    dateRange: "past_hour" | "past_day" | "past_week" | "custom" | "all";
+    customStartDate?: string;
+    customEndDate?: string;
+  }) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Not authenticated");
+
+      // Verify admin status
+      const userDoc = await getDoc(doc(db, "users", user.uid));
+      if (!userDoc.exists() || !userDoc.data()?.isAdmin) {
+        throw new Error("Unauthorized: Admin access required");
+      }
+
+      // Get Firebase ID token for API authentication
+      const token = await user.getIdToken();
+
+      // Build query parameters
+      const params = new URLSearchParams();
+      params.append("date_range", filters.dateRange);
+      
+      if (filters.issueTypes && filters.issueTypes.length > 0) {
+        filters.issueTypes.forEach((type) => {
+          params.append("issue_types", type);
+        });
+      }
+      
+      if (filters.entities && filters.entities.length > 0) {
+        filters.entities.forEach((entity) => {
+          params.append("entities", entity);
+        });
+      }
+      
+      if (filters.dateRange === "custom") {
+        if (filters.customStartDate) {
+          // Convert datetime-local format to ISO string
+          const startDate = new Date(filters.customStartDate);
+          params.append("custom_start_date", startDate.toISOString());
+        }
+        if (filters.customEndDate) {
+          // Convert datetime-local format to ISO string
+          const endDate = new Date(filters.customEndDate);
+          params.append("custom_end_date", endDate.toISOString());
+        }
+      }
+
+      const response = await fetch(`${API_BASE}/integrity/issues/bulk?${params.toString()}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: "Failed to bulk delete issues" }));
+        throw new Error(errorData.error || "Failed to bulk delete issues");
+      }
+
+      const result = await response.json();
+      setLoading(false);
+      return result.deleted_count || 0;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to bulk delete issues");
+      setLoading(false);
+      throw err;
+    }
+  };
+
   return {
     markResolved,
     markIgnored,
     deleteIssue,
+    bulkDeleteIssues,
     loading,
     error,
   };

@@ -303,30 +303,33 @@ class FirestoreClient:
             all_doc_ids = [doc_id for doc_id, _ in issue_doc_pairs]
             existing_ids = self._check_existing_documents(collection_ref, all_doc_ids)
             
-            # Filter out issues that already exist
+            # Separate new issues from existing issues
             new_issues = [(doc_id, issue) for doc_id, issue in issue_doc_pairs if doc_id not in existing_ids]
-            skipped_count = len(issue_doc_pairs) - len(new_issues)
+            existing_issues = [(doc_id, issue) for doc_id, issue in issue_doc_pairs if doc_id in existing_ids]
+            existing_count = len(existing_issues)
             
-            if skipped_count > 0:
+            if existing_count > 0:
                 logger.info(
-                    "Skipping duplicate issues",
-                    extra={"skipped": skipped_count, "total": len(issue_doc_pairs)},
+                    "Found existing issues that will be updated with run_id",
+                    extra={"existing": existing_count, "new": len(new_issues), "total": len(issue_doc_pairs)},
+                )
+            else:
+                logger.info(
+                    "All issues are new",
+                    extra={"new": len(new_issues), "total": len(issue_doc_pairs)},
                 )
             
-            if not new_issues:
-                logger.info("All issues already exist in Firestore, nothing to write")
-                if progress_callback:
-                    try:
-                        progress_callback(len(issue_doc_pairs), len(issue_doc_pairs), 100.0)
-                    except Exception:
-                        pass
-                return (0, len(issue_doc_pairs))
+            if not new_issues and not existing_issues:
+                logger.info("No issues to process")
+                return (0, 0)
             
             batch = client.batch()
             batch_count = 0
             total_written = 0
+            total_updated = 0
             total_new_issues = len(new_issues)
             
+            # Process new issues first
             for doc_id, issue in new_issues:
                 doc_ref = collection_ref.document(doc_id)
                 
@@ -344,52 +347,79 @@ class FirestoreClient:
                 
                 batch.set(doc_ref, issue_data, merge=True)
                 batch_count += 1
+                total_written += 1
                 
                 # Firestore batch limit is 500 operations
                 if batch_count >= 500:
                     batch.commit()
-                    total_written += batch_count
-                    percentage = (total_written / total_new_issues * 100) if total_new_issues > 0 else 0
-                    logger.info(
-                        "Wrote batch of issues to Firestore",
-                        extra={
-                            "batch_size": batch_count,
-                            "total_written": total_written,
-                            "total_new": total_new_issues,
-                            "skipped": skipped_count,
-                            "percentage": round(percentage, 1),
-                        },
-                    )
                     if progress_callback:
                         try:
-                            # Progress callback uses original total for user-facing progress
                             original_total = len(issue_doc_pairs)
-                            progress_callback(total_written, original_total, (total_written / original_total * 100) if original_total > 0 else 0)
+                            progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
                         except Exception:
-                            pass  # Don't fail on progress callback errors
+                            pass
                     batch = client.batch()
                     batch_count = 0
             
-            # Commit remaining issues
+            # Commit remaining new issues
             if batch_count > 0:
                 batch.commit()
-                total_written += batch_count
                 if progress_callback:
                     try:
                         original_total = len(issue_doc_pairs)
-                        progress_callback(total_written, original_total, (total_written / original_total * 100) if original_total > 0 else 0)
+                        progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
                     except Exception:
-                        pass  # Don't fail on progress callback errors
-                # Explicitly close batch (though Python GC handles it, this is cleaner)
+                        pass
+                batch = client.batch()
+                batch_count = 0
+            
+            # Now update existing issues with run_id (so they can be filtered by run_id)
+            for doc_id, issue in existing_issues:
+                doc_ref = collection_ref.document(doc_id)
+
+                # Update run_id and updated_at for existing issues
+                # Use set with merge=True instead of update to be more robust
+                update_data = {
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                if "run_id" in issue:
+                    update_data["run_id"] = issue["run_id"]
+
+                batch.set(doc_ref, update_data, merge=True)
+                batch_count += 1
+                total_updated += 1
+                
+                # Firestore batch limit is 500 operations
+                if batch_count >= 500:
+                    batch.commit()
+                    if progress_callback:
+                        try:
+                            original_total = len(issue_doc_pairs)
+                            progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
+                        except Exception:
+                            pass
+                    batch = client.batch()
+                    batch_count = 0
+            
+            # Commit remaining updates
+            if batch_count > 0:
+                batch.commit()
+                if progress_callback:
+                    try:
+                        original_total = len(issue_doc_pairs)
+                        progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
+                    except Exception:
+                        pass
                 batch = None
             
             logger.info(
                 "Recorded issues to Firestore",
                 extra={
                     "collection": self._config.issues_collection,
-                    "total_written": total_written,
-                    "skipped_duplicates": skipped_count,
-                    "total_checked": len(issue_doc_pairs),
+                    "new_issues": total_new_issues,
+                    "updated_existing": total_updated,
+                    "total_processed": len(issue_doc_pairs),
+                    "new_written": total_written,
                 },
             )
             
