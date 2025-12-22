@@ -6,6 +6,7 @@ import { useIssueCounts } from "../hooks/useIssueCounts";
 import { useIssueActions } from "../hooks/useIssueActions";
 import { useAuth } from "../hooks/useAuth";
 import { getAirtableLinksWithFallback } from "../utils/airtable";
+import { useAirtableSchema } from "../contexts/AirtableSchemaContext";
 import { formatRuleId } from "../utils/ruleFormatter";
 import ConfirmModal from "./ConfirmModal";
 import openInNewTabIcon from "../assets/open_in_new_tab.svg";
@@ -14,7 +15,7 @@ import arrowRightIcon from "../assets/keyboard_arrow_right.svg";
 import doubleArrowLeftIcon from "../assets/keyboard_double_arrow_left.svg";
 import doubleArrowRightIcon from "../assets/keyboard_double_arrow_right.svg";
 
-const ITEMS_PER_PAGE = 100;
+const ITEMS_PER_PAGE = 50;
 
 interface IssueListProps {
   filters?: IssueFilters;
@@ -26,6 +27,7 @@ export function IssueList({
   onClose,
 }: IssueListProps) {
   const navigate = useNavigate();
+  const { schema } = useAirtableSchema();
   // If initialFilters provided, use them (for queue filtering from dashboard)
   // Otherwise default to showing all open issues
   const [filters, setFilters] = useState<IssueFilters>(
@@ -50,6 +52,7 @@ export function IssueList({
     initialFilters?.severity,
     initialFilters?.entity,
     initialFilters?.status,
+    initialFilters?.run_id,
   ]);
 
   // Get counts for total pages calculation
@@ -84,17 +87,11 @@ export function IssueList({
   } = useIssueActions();
   const { isAdmin } = useAuth();
   const [resolvingId, setResolvingId] = useState<string | null>(null);
-<<<<<<< HEAD
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     issueId: string | null;
     action: "resolve" | "delete" | null;
-=======
-  const [confirmModal, setConfirmModal] = useState<{
-    isOpen: boolean;
-    issueId: string | null;
->>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
   }>({
     isOpen: false,
     issueId: null,
@@ -401,7 +398,8 @@ export function IssueList({
                 {issues.map((issue) => {
                   const airtableLinks = getAirtableLinksWithFallback(
                     issue.entity,
-                    issue.record_id
+                    issue.record_id,
+                    schema
                   );
                   return (
                     <tr
@@ -428,38 +426,25 @@ export function IssueList({
                         </span>
                       </td>
                       <td className="px-4 py-3 font-mono text-xs">
-<<<<<<< HEAD
-                        <a
-                          href={
-                            airtableLinks?.primary || `https://airtable.com`
-                          }
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-[var(--cta-blue)] hover:underline cursor-pointer inline-flex items-center gap-1"
-                          title={`Open ${issue.record_id} in Airtable (${issue.entity})`}
-                        >
-                          {issue.record_id}
-                          <img
-                            src={openInNewTabIcon}
-                            alt="Open in new tab"
-                            className="w-3 h-3 inline-block"
-                            style={{
-                              filter:
-                                "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
-                            }}
-                          />
-                        </a>
-=======
-                        {airtableLink ? (
+                        {airtableLinks?.primary ? (
                           <a
-                            href={airtableLink}
+                            href={airtableLinks.primary}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[var(--cta-blue)] hover:underline cursor-pointer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-[var(--cta-blue)] hover:underline cursor-pointer inline-flex items-center gap-1"
                             title={`Open ${issue.record_id} in Airtable (${issue.entity})`}
                           >
                             {issue.record_id}
+                            <img
+                              src={openInNewTabIcon}
+                              alt="Open in new tab"
+                              className="w-3 h-3 inline-block"
+                              style={{
+                                filter:
+                                  "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(210deg) brightness(97%) contrast(95%)",
+                              }}
+                            />
                           </a>
                         ) : (
                           <span
@@ -469,7 +454,6 @@ export function IssueList({
                             {issue.record_id}
                           </span>
                         )}
->>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
                       </td>
                       <td className="px-4 py-3 text-right text-xs text-[var(--text-muted)]">
                         {formatAge(issue.created_at)}

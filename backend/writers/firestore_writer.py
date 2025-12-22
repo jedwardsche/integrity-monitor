@@ -71,16 +71,19 @@ class FirestoreWriter:
         """Write daily metrics to Firestore."""
         self._client.record_metrics(payload)
 
-    def write_issues(self, issues: Iterable[IssuePayload], run_id: Optional[str] = None) -> None:
+    def write_issues(self, issues: Iterable[IssuePayload], run_id: Optional[str] = None) -> int:
         """Write individual issues to Firestore integrity_issues collection.
         
         Args:
             issues: Iterable of IssuePayload objects to write
             run_id: Optional run ID for progress logging
+            
+        Returns:
+            Number of new issues written (issues that didn't exist before)
         """
         issues_list = list(issues)
         if not issues_list:
-            return
+            return 0
         
         # Convert IssuePayload objects to dictionaries
         issue_dicts = []
@@ -115,7 +118,8 @@ class FirestoreWriter:
             
             progress_callback = log_progress
         
-        self._client.record_issues(issue_dicts, progress_callback=progress_callback)
+        new_count, total_count = self._client.record_issues(issue_dicts, progress_callback=progress_callback)
+        return new_count
 
     def write_log(self, run_id: str, level: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Write a log entry to Firestore for the run.

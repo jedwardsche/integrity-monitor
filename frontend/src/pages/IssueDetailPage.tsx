@@ -14,7 +14,10 @@ import { getAirtableLinksWithFallback } from "../utils/airtable";
 import { formatRuleId } from "../utils/ruleFormatter";
 import { useIssueActions } from "../hooks/useIssueActions";
 import { useAuth } from "../hooks/useAuth";
+import { useAirtableSchema } from "../contexts/AirtableSchemaContext";
+import { useAirtableRecords } from "../hooks/useAirtableRecords";
 import ConfirmModal from "../components/ConfirmModal";
+import { AirtableRecordCards } from "../components/AirtableRecordCard";
 import openInNewTabIcon from "../assets/open_in_new_tab.svg";
 
 export function IssueDetailPage() {
@@ -31,6 +34,7 @@ export function IssueDetailPage() {
     loading: actionLoading,
   } = useIssueActions();
   const { isAdmin } = useAuth();
+  const { schema } = useAirtableSchema();
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
@@ -115,6 +119,32 @@ export function IssueDetailPage() {
 
     return Array.from(records);
   }, [issue, relatedIssues]);
+
+  // Determine which record IDs to fetch for the record cards
+  // For duplicates: fetch first 2 records (side-by-side display)
+  // For other issues: fetch just the primary record
+  const recordIdsToFetch = useMemo(() => {
+    if (!issue) return [];
+
+    if (issue.issue_type === "duplicate") {
+      // For duplicates, show the current record and first related record (if any)
+      const ids = [issue.record_id];
+      if (issue.related_records && issue.related_records.length > 0) {
+        ids.push(issue.related_records[0]);
+      }
+      return ids.slice(0, 2); // Max 2 for side-by-side
+    }
+
+    // For non-duplicate issues, just fetch the primary record
+    return [issue.record_id];
+  }, [issue]);
+
+  // Fetch Airtable record data
+  const {
+    records: airtableRecords,
+    loading: recordsLoading,
+    error: recordsError,
+  } = useAirtableRecords(issue?.entity, recordIdsToFetch);
 
   const fetchRelatedDuplicateIssues = async (currentIssue: Issue) => {
     if (!currentIssue.rule_id || currentIssue.issue_type !== "duplicate") {
@@ -271,7 +301,7 @@ export function IssueDetailPage() {
   }
 
   const airtableLinks = issue
-    ? getAirtableLinksWithFallback(issue.entity, issue.record_id)
+    ? getAirtableLinksWithFallback(issue.entity, issue.record_id, schema)
     : { primary: "https://airtable.com" };
   const relatedRecords = issue?.related_records || [];
   const metadata = issue?.metadata || {};
@@ -427,7 +457,8 @@ export function IssueDetailPage() {
                 const isCurrentRecord = recordId === issue.record_id;
                 const recordLinks = getAirtableLinksWithFallback(
                   issue.entity,
-                  recordId
+                  recordId,
+                  schema
                 );
                 return (
                   <div
@@ -489,7 +520,8 @@ export function IssueDetailPage() {
                   {relatedIssues.map((relatedIssue) => {
                     const relatedLinks = getAirtableLinksWithFallback(
                       relatedIssue.entity,
-                      relatedIssue.record_id
+                      relatedIssue.record_id,
+                      schema
                     );
                     return (
                       <div
@@ -637,6 +669,18 @@ export function IssueDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Airtable Record Data Cards */}
+      {issue && recordIdsToFetch.length > 0 && (
+        <AirtableRecordCards
+          records={airtableRecords}
+          entity={issue.entity}
+          recordIds={recordIdsToFetch}
+          currentRecordId={issue.record_id}
+          loading={recordsLoading}
+          error={recordsError}
+        />
+      )}
 
       <ConfirmModal
         isOpen={confirmModal.isOpen && confirmModal.action === "resolve"}

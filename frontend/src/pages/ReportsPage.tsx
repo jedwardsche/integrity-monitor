@@ -1,407 +1,268 @@
-import { useNavigate } from "react-router-dom";
-import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
-import { RunDetailModal } from "../components/RunDetailModal";
 import { useState } from "react";
+import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
+import { useFirestoreMetrics } from "../hooks/useFirestoreMetrics";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
+import { RunDetailModal } from "../components/RunDetailModal";
 import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
-import { useAuth } from "../hooks/useAuth";
-import { generateRunReport } from "../services/pdfReportService";
 
-import { API_BASE } from "../config/api";
+const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined) ||
+  window.location.origin;
 
 export function ReportsPage() {
-  const navigate = useNavigate();
   const { data: runs, loading, error } = useFirestoreRuns(50);
+  const { trends, loading: trendsLoading, error: trendsError } = useFirestoreMetrics(7);
+  const [downloading, setDownloading] = useState(false);
   const [selectedRun, setSelectedRun] = useState<RunHistoryItem | null>(null);
-  const { getToken } = useAuth();
-  const [generatingReport, setGeneratingReport] = useState<string | null>(null);
-  const [downloadingRunId, setDownloadingRunId] = useState<string | null>(null);
 
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case "healthy":
-      case "success":
-        return "bg-green-100 text-green-800";
-      case "critical":
-      case "error":
-        return "bg-red-100 text-red-800";
-      case "warning":
-        return "bg-yellow-100 text-yellow-800";
-      case "cancelled":
-      case "canceled":
-        return "bg-gray-100 text-gray-800";
-      case "running":
-        return "bg-blue-100 text-blue-800";
-      default:
-        return "bg-blue-100 text-blue-800";
-    }
-  };
-
-  const handleDownloadPDF = async (
-    run: RunHistoryItem,
-    e: React.MouseEvent
-  ) => {
-    e.stopPropagation();
-
-    const isRunning = run.status.toLowerCase() === "running" || !run.ended_at;
-    if (isRunning) {
-      return;
-    }
-
-    if (downloadingRunId) return;
-
-    setDownloadingRunId(run.id);
-
+  const handleDownloadParams = async () => {
     try {
-      const blob = await generateRunReport(run);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
+      setDownloading(true);
+      const token = localStorage.getItem("auth_token"); // Simple auth for now
+      const response = await fetch(`${API_BASE}/integrity/export/params`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
-      const runDate =
-        run.started_at?.toDate?.() || run.ended_at?.toDate?.() || new Date();
-      const dateStr =
-        runDate instanceof Date
-          ? runDate.toISOString().split("T")[0]
-          : new Date().toISOString().split("T")[0];
-      const runId = (run.run_id || run.id).substring(0, 8);
+      if (!response.ok) throw new Error("Download failed");
 
-      link.download = `integrity-report-${runId}-${dateStr}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error("Failed to generate PDF:", error);
-      alert("Failed to generate PDF report. Please try again.");
-    } finally {
-      setDownloadingRunId(null);
-    }
-  };
-
-  const downloadJSON = (data: any, filename: string) => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const generateTrendReport = async () => {
-    setGeneratingReport("trend");
-    try {
-      const token = await getToken();
-      const response = await fetch(
-        `${API_BASE}/integrity/metrics/trends?days=7`,
-        {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }
-      );
-      if (!response.ok) throw new Error("Failed to fetch trend data");
-      const data = await response.json();
-      const filename = `trend-report-7day-${
-        new Date().toISOString().split("T")[0]
-      }.json`;
-      downloadJSON(data, filename);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `integrity-params-${new Date()
+        .toISOString()
+        .slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     } catch (err) {
-      alert(
-        err instanceof Error ? err.message : "Failed to generate trend report"
-      );
+      console.error("Export failed:", err);
+      alert("Failed to download report");
     } finally {
-      setGeneratingReport(null);
+      setDownloading(false);
     }
   };
 
-  const generateDashboardReport = async () => {
-    setGeneratingReport("dashboard");
-    try {
-      const token = await getToken();
-      const [
-        summaryRes,
-        trendsRes,
-        queuesRes,
-        derivedRes,
-        runsRes,
-        flaggedRes,
-      ] = await Promise.all([
-        fetch(`${API_BASE}/integrity/metrics/summary`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }),
-        fetch(`${API_BASE}/integrity/metrics/trends?days=7`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }),
-        fetch(`${API_BASE}/integrity/metrics/queues`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }),
-        fetch(`${API_BASE}/integrity/metrics/derived`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }),
-        fetch(`${API_BASE}/integrity/metrics/runs?limit=50`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }),
-        fetch(`${API_BASE}/integrity/metrics/flagged-rules`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }),
-      ]);
+  // Get all unique issue types from the trend data to create lines
+  const issueTypes = Array.from(
+    new Set(
+      trends.flatMap((item) =>
+        Object.keys(item).filter((key) => key !== "day")
+      )
+    )
+  );
 
-      if (
-        !summaryRes.ok ||
-        !trendsRes.ok ||
-        !queuesRes.ok ||
-        !derivedRes.ok ||
-        !runsRes.ok ||
-        !flaggedRes.ok
-      ) {
-        throw new Error("Failed to fetch dashboard metrics");
-      }
-
-      const [summary, trends, queues, derived, runs, flagged] =
-        await Promise.all([
-          summaryRes.json(),
-          trendsRes.json(),
-          queuesRes.json(),
-          derivedRes.json(),
-          runsRes.json(),
-          flaggedRes.json(),
-        ]);
-
-      const report = {
-        generated_at: new Date().toISOString(),
-        summary,
-        trends,
-        queues,
-        derived,
-        runs,
-        flagged_rules: flagged,
-      };
-
-      const filename = `dashboard-metrics-report-${
-        new Date().toISOString().split("T")[0]
-      }.json`;
-      downloadJSON(report, filename);
-    } catch (err) {
-      alert(
-        err instanceof Error
-          ? err.message
-          : "Failed to generate dashboard report"
-      );
-    } finally {
-      setGeneratingReport(null);
-    }
+  // Color map for known issue types
+  const colorMap: Record<string, string> = {
+    duplicate: "#ef4444", // red
+    missing_link: "#3b82f6", // blue
+    attendance: "#8b5cf6", // purple
+    missing_field: "#10b981", // green
+    unknown: "#6b7280", // gray
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--brand)] mb-4"></div>
-          <p className="text-[var(--text-muted)]">Loading reports...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <p className="text-red-600 mb-4">{error}</p>
-          <button
-            onClick={() => navigate("/")}
-            className="rounded-lg border border-[var(--border)] px-4 py-2 text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors"
-          >
-            Back to Dashboard
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // Function to get color for a type (fallback to hash or gray if not known)
+  const getColor = (type: string) => {
+    if (colorMap[type]) return colorMap[type];
+    // Simple hash for consistent colors for unknown types
+    let hash = 0;
+    for (let i = 0; i < type.length; i++) {
+      hash = type.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const c = (hash & 0x00ffffff).toString(16).toUpperCase();
+    return "#" + "00000".substring(0, 6 - c.length) + c;
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1
-            className="text-2xl font-semibold text-[var(--text-main)] mb-2"
-            style={{ fontFamily: "Outfit" }}
-          >
-            Reports
-          </h1>
-          <p className="text-sm text-[var(--text-muted)]">
-            View and download integrity scan reports
+          <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            View run history and export data
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-2">
           <button
-            onClick={generateTrendReport}
-            disabled={generatingReport !== null}
-            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            onClick={handleDownloadParams}
+            disabled={downloading}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
           >
-            {generatingReport === "trend" ? (
-              <>
-                <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-[var(--brand)]"></div>
-                Generating...
-              </>
-            ) : (
-              <>
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                7-Day Trend Report
-              </>
-            )}
-          </button>
-          <button
-            onClick={generateDashboardReport}
-            disabled={generatingReport !== null}
-            className="rounded-lg border border-[var(--brand)] px-4 py-2 text-sm font-medium text-[var(--brand)] hover:bg-[var(--brand)]/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {generatingReport === "dashboard" ? (
-              <>
-                <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-[var(--brand)]"></div>
-                Generating...
-              </>
-            ) : (
-              <>
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                Full Dashboard Report
-              </>
-            )}
+            {downloading ? "Downloading..." : "Export Parameters"}
           </button>
         </div>
       </div>
 
-      {runs.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-[var(--text-muted)]">No reports available yet.</p>
-          <p className="text-sm text-[var(--text-muted)] mt-2">
-            Run a scan to generate your first report.
-          </p>
+      {/* Trend Graph */}
+      <div className="bg-white shadow rounded-lg p-6">
+        <h2 className="text-lg font-medium text-gray-900 mb-4">
+          7-Day Issue Trend
+        </h2>
+        
+        {trendsLoading ? (
+          <div className="h-64 flex items-center justify-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+          </div>
+        ) : trendsError ? (
+          <div className="h-64 flex items-center justify-center text-red-500">
+            Error loading trend data: {trendsError}
+          </div>
+        ) : trends.length === 0 ? (
+          <div className="h-64 flex items-center justify-center text-gray-500">
+            No trend data available for the last 7 days.
+          </div>
+        ) : (
+          <div className="h-80 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={trends}
+                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="day" />
+                <YAxis />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#fff",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: "0.375rem",
+                    boxShadow:
+                      "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+                  }}
+                />
+                <Legend />
+                {issueTypes.map((type) => (
+                  <Line
+                    key={type}
+                    type="monotone"
+                    dataKey={type}
+                    name={type.replace("_", " ").replace(/\b\w/g, l => l.toUpperCase())} // Title Case
+                    stroke={getColor(type)}
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    activeDot={{ r: 6 }}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* Run History Table */}
+      <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
+          <h3 className="text-lg leading-6 font-medium text-gray-900">
+            Run History
+          </h3>
         </div>
-      ) : (
-        <div className="rounded-2xl border border-[var(--border)] bg-white overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-[var(--bg-mid)] text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">
-              <tr>
-                <th className="px-4 py-3">Time</th>
-                <th className="px-4 py-3">Trigger</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Issues</th>
-                <th className="px-4 py-3">Duration</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((run) => (
-                <tr
-                  key={run.id}
-                  className="border-t border-[var(--border)]/70 hover:bg-[var(--bg-mid)]/30 cursor-pointer"
-                  onClick={() => setSelectedRun(run)}
-                >
-                  <td className="px-4 py-3">{run.time}</td>
-                  <td className="px-4 py-3">{run.trigger}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
-                        run.status
-                      )}`}
-                    >
-                      {(() => {
-                        const statusLower = (run.status || "").toLowerCase();
-                        if (
-                          statusLower === "cancelled" ||
-                          statusLower === "canceled"
-                        ) {
-                          return "Cancelled";
-                        }
-                        return run.status;
-                      })()}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 font-medium">
-                    {run.anomalies.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-[var(--text-muted)]">
-                    {run.duration}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-3">
-                      <button
-                        onClick={(e) => handleDownloadPDF(run, e)}
-                        disabled={
-                          downloadingRunId === run.id ||
-                          run.status.toLowerCase() === "running" ||
-                          !run.ended_at
-                        }
-                        className="p-1.5 rounded hover:bg-[var(--bg-mid)]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={
-                          run.status.toLowerCase() === "running" ||
-                          !run.ended_at
-                            ? "Cannot download running scans"
-                            : "Download PDF Report"
-                        }
-                      >
-                        {downloadingRunId === run.id ? (
-                          <div className="w-4 h-4 border-2 border-[var(--cta-blue)] border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 -960 960 960"
-                            className="w-4 h-4"
-                            fill="currentColor"
-                          >
-                            <path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z" />
-                          </svg>
-                        )}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (run.run_id) {
-                            navigate(`/run/${run.run_id}`);
-                          }
-                        }}
-                        className="text-xs text-[var(--cta-blue)] hover:underline"
-                      >
-                        View
-                      </button>
-                    </div>
-                  </td>
+        
+        {loading ? (
+          <div className="p-8 text-center text-gray-500">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+            Loading history...
+          </div>
+        ) : error ? (
+          <div className="p-8 text-center text-red-500">
+            Error: {error}
+          </div>
+        ) : runs.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">
+            No run history available.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th
+                    scope="col"
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  >
+                    Date
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  >
+                    Duration
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  >
+                    Issues Found
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  >
+                    Status
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  >
+                    Trigger
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {runs.map((run) => (
+                  <tr 
+                    key={run.id} 
+                    className="hover:bg-gray-50 cursor-pointer"
+                    onClick={() => setSelectedRun(run)}
+                  >
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {run.started_at?.toDate
+                        ? run.started_at.toDate().toLocaleString()
+                        : new Date().toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {run.duration_ms
+                        ? `${(run.duration_ms / 1000).toFixed(1)}s`
+                        : "-"}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {run.anomalies_found}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span
+                        className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          run.status === "completed"
+                            ? "bg-green-100 text-green-800"
+                            : run.status === "failed"
+                            ? "bg-red-100 text-red-800"
+                            : "bg-yellow-100 text-yellow-800"
+                        }`}
+                      >
+                        {run.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {run.trigger_source || "manual"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {selectedRun && (
         <RunDetailModal

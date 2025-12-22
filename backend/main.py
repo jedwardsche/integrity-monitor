@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Request, status, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
@@ -64,44 +65,6 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestIDMiddleware)
 
-<<<<<<< HEAD
-# Global exception handler to ensure CORS headers are always added
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler that ensures CORS headers are always present."""
-    if isinstance(exc, HTTPException):
-        status_code = exc.status_code
-        detail = exc.detail
-        headers = exc.headers or {}
-    else:
-        status_code = 500
-        detail = f"Internal server error: {str(exc)}"
-        headers = {}
-        logger.error("Unhandled exception", exc_info=True, extra={"path": request.url.path})
-    
-    # Create response with CORS headers
-    response = JSONResponse(
-        status_code=status_code,
-        content={"detail": detail},
-        headers=headers
-    )
-    
-    # Add CORS headers manually if not already present
-    origin = request.headers.get("origin")
-    if origin and origin in allowed_origins:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-    elif not allowed_origins or "*" in allowed_origins:
-        response.headers["Access-Control-Allow-Origin"] = "*"
-    
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-    
-    return response
-
-schema_config = load_schema_config()
-runner = IntegrityRunner()
-=======
 # #region agent log
 try:
     with open(debug_log, 'a') as f:
@@ -136,14 +99,11 @@ except Exception as e:
     # Set runner to None - endpoints that need it will handle the error
     runner = None
     logger.warning("IntegrityRunner not available - some endpoints may fail")
->>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
 
 # Global dictionary to track running scans: {run_id: threading.Event}
 running_scans: dict[str, threading.Event] = {}
 running_scans_lock = threading.Lock()
 
-<<<<<<< HEAD
-=======
 # #region agent log
 try:
     with open(debug_log, 'a') as f:
@@ -174,7 +134,6 @@ async def shutdown_event():
     """Log when the application is shutting down."""
     logger.info("Application shutdown event triggered")
 
->>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
 
 @app.get("/health")
 def health():
@@ -362,7 +321,7 @@ def schema():
     return schema_config.model_dump()
 
 
-def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event: threading.Event, entities: list[str] = None):
+def _run_integrity_background(run_id: str, trigger: str, cancel_event: threading.Event, entities: list[str] = None):
     """Run integrity scan in background thread."""
     try:
         # Create a new runner instance for this thread
@@ -370,7 +329,7 @@ def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event
             logger.error("IntegrityRunner not available - cannot start scan", extra={"run_id": run_id})
             return
         thread_runner = IntegrityRunner()
-        result = thread_runner.run(run_id=run_id, mode=mode, trigger=trigger, cancel_event=cancel_event, entities=entities)
+        result = thread_runner.run(run_id=run_id, trigger=trigger, cancel_event=cancel_event, entities=entities)
         logger.info(
             "Integrity run completed",
             extra={"run_id": run_id, "status": result.get("status", "success")},
@@ -388,12 +347,11 @@ def _run_integrity_background(run_id: str, mode: str, trigger: str, cancel_event
 
 
 @app.post("/integrity/run", dependencies=[Depends(verify_cloud_scheduler_auth)])
-def run_integrity(request: Request, mode: str = "incremental", trigger: str = "manual", entities: Optional[List[str]] = Query(default=None)):
+def run_integrity(request: Request, trigger: str = "manual", entities: Optional[List[str]] = Query(default=None)):
     """Trigger the integrity runner (runs in background).
 
     Args:
         request: FastAPI request object (injected)
-        mode: Run mode ("incremental" or "full")
         trigger: Trigger source ("nightly", "weekly", or "manual")
         entities: Optional list of entity names to scan (if not provided, scans all entities)
 
@@ -403,7 +361,7 @@ def run_integrity(request: Request, mode: str = "incremental", trigger: str = "m
     """
     # Get request ID from middleware
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.info("Integrity run requested", extra={"mode": mode, "trigger": trigger, "entities": entities, "request_id": request_id})
+    logger.info("Integrity run requested", extra={"trigger": trigger, "entities": entities, "request_id": request_id})
 
     try:
         # Generate run_id first
@@ -420,7 +378,7 @@ def run_integrity(request: Request, mode: str = "incremental", trigger: str = "m
         # Start background thread
         thread = threading.Thread(
             target=_run_integrity_background,
-            args=(run_id, mode, trigger, cancel_event, entities),
+            args=(run_id, trigger, cancel_event, entities),
             daemon=True,
         )
         thread.start()
@@ -567,8 +525,13 @@ def cancel_integrity_run(run_id: str, request: Request):
         update_data = {
             "status": "cancelled",  # Use lowercase to match integrity runner
             "ended_at": end_time,
+            "cancelled_at": end_time,  # Separate field for cancellation time
             "duration_ms": duration_ms,
         }
+        
+        # Explicitly preserve started_at if it exists (don't overwrite it)
+        if "started_at" in run_data:
+            update_data["started_at"] = run_data["started_at"]
         
         # Preserve timing breakdown if it exists
         if "duration_fetch" in run_data:
@@ -1024,4 +987,150 @@ def integrity_kpi_sample():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "KPI sampling failed", "message": str(exc)},
+        )
+
+
+class RecordsByIdsRequest(BaseModel):
+    """Request body for fetching records by IDs."""
+    entity: str
+    record_ids: List[str]
+
+
+@app.post("/airtable/records/by-ids", dependencies=[Depends(verify_firebase_token)])
+def get_airtable_records_by_ids(request: Request, body: RecordsByIdsRequest):
+    """Fetch specific Airtable records by their IDs.
+
+    Args:
+        request: FastAPI request object (injected)
+        body: Request body with entity and record_ids
+
+    Returns:
+        Dictionary with records data keyed by record ID
+    """
+    entity = body.entity
+    record_ids = body.record_ids
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.info(
+        "Fetching Airtable records by IDs",
+        extra={"entity": entity, "record_count": len(record_ids), "request_id": request_id},
+    )
+
+    if not record_ids:
+        return {"records": {}, "count": 0}
+
+    # Limit to prevent abuse
+    if len(record_ids) > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot fetch more than 50 records at once"
+        )
+
+    try:
+        import os
+        from pyairtable import Api
+        from pyairtable.formulas import RECORD_ID, OR
+
+        # Load schema to get table ID from entity name
+        schema_data = schema_service.load()
+        base_id = schema_data.get("baseId")
+
+        if not base_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Base ID not found in schema. Please regenerate the schema."
+            )
+
+        # Find table by entity name
+        entity_lower = entity.lower().strip()
+        # Map singular to plural
+        entity_mapping = {
+            "student": "students",
+            "parent": "parents",
+            "contractor": "contractors",
+            "class": "classes",
+        }
+        normalized_entity = entity_mapping.get(entity_lower, entity_lower)
+
+        table_id = None
+        for table in schema_data.get("tables", []):
+            table_name_lower = table.get("name", "").lower().strip()
+            if (table_name_lower == normalized_entity or
+                table_name_lower == entity_lower or
+                normalized_entity in table_name_lower):
+                table_id = table.get("id")
+                break
+
+        if not table_id:
+            # Try environment variable fallback
+            env_key = f"AIRTABLE_{normalized_entity.upper()}_TABLE"
+            table_id = os.getenv(env_key)
+
+        if not table_id:
+            logger.warning(
+                "Table not found for entity",
+                extra={"entity": entity, "normalized": normalized_entity, "request_id": request_id},
+            )
+            return {"records": {}, "count": 0, "error": f"Table not found for entity: {entity}"}
+
+        # Get Airtable API client
+        pat = os.getenv("AIRTABLE_PAT")
+        api_key = os.getenv("AIRTABLE_API_KEY")
+
+        if not pat and not api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="AIRTABLE_PAT or AIRTABLE_API_KEY environment variable must be set"
+            )
+
+        token = pat or api_key
+        api = Api(token)
+        table = api.table(base_id, table_id)
+
+        # Build formula to fetch records by IDs
+        # RECORD_ID() = 'recXXX' OR RECORD_ID() = 'recYYY' ...
+        record_conditions = [f"RECORD_ID()='{rid}'" for rid in record_ids]
+        formula = f"OR({','.join(record_conditions)})"
+
+        logger.debug(
+            "Fetching records with formula",
+            extra={"formula": formula[:200], "request_id": request_id},
+        )
+
+        # Fetch records
+        fetched = list(table.all(formula=formula))
+
+        # Build response keyed by record ID
+        records_by_id = {}
+        for record in fetched:
+            rid = record.get("id")
+            fields = record.get("fields", {})
+            records_by_id[rid] = {
+                "id": rid,
+                "fields": fields,
+                "createdTime": record.get("createdTime"),
+            }
+
+        logger.info(
+            "Successfully fetched Airtable records",
+            extra={
+                "entity": entity,
+                "requested": len(record_ids),
+                "fetched": len(records_by_id),
+                "request_id": request_id,
+            },
+        )
+
+        return {"records": records_by_id, "count": len(records_by_id)}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to fetch Airtable records by IDs",
+            extra={"entity": entity, "error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to fetch records", "message": str(exc)},
         )

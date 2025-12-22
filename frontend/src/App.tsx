@@ -7,6 +7,7 @@ import { useAuth } from "./hooks/useAuth";
 import { useRunStatus } from "./hooks/useRunStatus";
 import { useFirestoreRuns } from "./hooks/useFirestoreRuns";
 import { ToastContainer } from "./components/Toast";
+import { AirtableSchemaProvider } from "./contexts/AirtableSchemaContext";
 import databaseSearchIcon from "./assets/database_search.svg";
 
 import { API_BASE } from "./config/api";
@@ -156,7 +157,6 @@ export default function App({ children }: AppProps) {
 
       // Build query parameters
       const params = new URLSearchParams({
-        mode: config.mode,
         trigger: "manual",
       });
 
@@ -358,115 +358,137 @@ export default function App({ children }: AppProps) {
   }, [runs, runsLoading]);
   return (
     <div className="min-h-screen bg-[var(--bg-warm-light)] text-[var(--text-main)]">
-      <header className="border-b border-[var(--border)] bg-[var(--bg-light)]/90">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2 flex-1">
-            <div className="flex items-center gap-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--brand)]">
-                <img
-                  src={databaseSearchIcon}
-                  alt="Database Search"
-                  className="w-6 h-6 brightness-0 invert"
-                />
+      <AirtableSchemaProvider>
+        <header className="border-b border-[var(--border)] bg-[var(--bg-light)]/90">
+          <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2 flex-1">
+              <div className="flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--brand)]">
+                  <img
+                    src={databaseSearchIcon}
+                    alt="Database Search"
+                    className="w-6 h-6 brightness-0 invert"
+                  />
+                </div>
+                <div>
+                  <p
+                    className="font-semibold tracking-tight"
+                    style={{ fontFamily: "Outfit" }}
+                  >
+                    Data Integrity Monitor
+                  </p>
+                </div>
               </div>
-              <div>
-                <p
-                  className="font-semibold tracking-tight"
-                  style={{ fontFamily: "Outfit" }}
-                >
-                  Data Integrity Monitor
-                </p>
-              </div>
+              <nav className="ml-2">
+                <div className="inline-flex rounded-full border border-[var(--border)] bg-white/80 p-1 text-sm">
+                  <NavLink
+                    to="/"
+                    className={({ isActive }) =>
+                      `rounded-full px-4 py-1.5 font-medium transition-colors ${
+                        isActive
+                          ? "bg-[var(--brand)] text-white"
+                          : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                      }`
+                    }
+                  >
+                    Dashboard
+                  </NavLink>
+                  <NavLink
+                    to="/runs"
+                    className={({ isActive }) =>
+                      `rounded-full px-4 py-1.5 font-medium transition-colors ${
+                        isActive
+                          ? "bg-[var(--brand)] text-white"
+                          : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                      }`
+                    }
+                  >
+                    Runs
+                  </NavLink>
+                  <NavLink
+                    to="/issues"
+                    className={({ isActive }) =>
+                      `rounded-full px-4 py-1.5 font-medium transition-colors ${
+                        isActive
+                          ? "bg-[var(--brand)] text-white"
+                          : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                      }`
+                    }
+                  >
+                    Issues
+                  </NavLink>
+                  <NavLink
+                    to="/schema"
+                    className={({ isActive }) =>
+                      `rounded-full px-4 py-1.5 font-medium transition-colors ${
+                        isActive
+                          ? "bg-[var(--brand)] text-white"
+                          : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                      }`
+                    }
+                  >
+                    Airtable Schema
+                  </NavLink>
+                </div>
+              </nav>
             </div>
-            <nav className="ml-2">
-              <div className="inline-flex rounded-full border border-[var(--border)] bg-white/80 p-1 text-sm">
-                <NavLink
-                  to="/"
-                  className={({ isActive }) =>
-                    `rounded-full px-4 py-1.5 font-medium transition-colors ${
-                      isActive
-                        ? "bg-[var(--brand)] text-white"
-                        : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
-                    }`
-                  }
-                >
-                  Dashboard
-                </NavLink>
-                <NavLink
-                  to="/runs"
-                  className={({ isActive }) =>
-                    `rounded-full px-4 py-1.5 font-medium transition-colors ${
-                      isActive
-                        ? "bg-[var(--brand)] text-white"
-                        : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
-                    }`
-                  }
-                >
-                  Runs
-                </NavLink>
-                <NavLink
-                  to="/issues"
-                  className={({ isActive }) =>
-                    `rounded-full px-4 py-1.5 font-medium transition-colors ${
-                      isActive
-                        ? "bg-[var(--brand)] text-white"
-                        : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
-                    }`
-                  }
-                >
-                  Issues
-                </NavLink>
-                <NavLink
-                  to="/schema"
-                  className={({ isActive }) =>
-                    `rounded-full px-4 py-1.5 font-medium transition-colors ${
-                      isActive
-                        ? "bg-[var(--brand)] text-white"
-                        : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
-                    }`
-                  }
-                >
-                  Airtable Schema
-                </NavLink>
-              </div>
-            </nav>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--text-muted)]">
-            {runsLoading ? (
-              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--border)] animate-pulse" />
-                Loading...
-              </div>
-            ) : lastRunInfo ? (
-              <button
-                onClick={() => navigate(`/run/${lastRunInfo.runId}`)}
-                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1 hover:bg-white/90 transition-colors cursor-pointer"
-              >
-                <span
-                  className={`inline-block h-1.5 w-1.5 rounded-full ${lastRunInfo.statusColor}`}
-                />
-                Last run {lastRunInfo.time} • {lastRunInfo.status}
-              </button>
-            ) : (
-              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--border)]" />
-                No runs yet
-              </div>
-            )}
-            <div className="flex gap-1.5 items-center">
-              {runScanLoading && currentRunId ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--text-muted)]">
+              {runsLoading ? (
+                <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--border)] animate-pulse" />
+                  Loading...
+                </div>
+              ) : lastRunInfo ? (
                 <button
-                  onClick={handleRunningClick}
-                  className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-[var(--brand)] font-medium hover:bg-[var(--brand)]/5 transition-colors flex items-center gap-2"
+                  onClick={() => navigate(`/run/${lastRunInfo.runId}`)}
+                  className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1 hover:bg-white/90 transition-colors cursor-pointer"
                 >
-                  <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
-                  Running...
+                  <span
+                    className={`inline-block h-1.5 w-1.5 rounded-full ${lastRunInfo.statusColor}`}
+                  />
+                  Last run {lastRunInfo.time} • {lastRunInfo.status}
                 </button>
               ) : (
-                <button
-                  onClick={handleRunScanClick}
-                  disabled={runScanLoading}
-                  className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-[var(--brand)] font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--brand)]/5 transition-colors flex items-center justify-center gap-2"
+                <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/70 px-3 py-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--border)]" />
+                  No runs yet
+                </div>
+              )}
+              <div className="flex gap-1.5 items-center">
+                {runScanLoading && currentRunId ? (
+                  <button
+                    onClick={handleRunningClick}
+                    className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-[var(--brand)] font-medium hover:bg-[var(--brand)]/5 transition-colors flex items-center gap-2"
+                  >
+                    <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
+                    Running...
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleRunScanClick}
+                    disabled={runScanLoading}
+                    className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-[var(--brand)] font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--brand)]/5 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      height="16px"
+                      viewBox="0 -960 960 960"
+                      width="16px"
+                      className="w-4 h-4 flex-shrink-0"
+                      fill="var(--brand)"
+                    >
+                      <path d="M200-800v241-1 400-640 200-200Zm0 720q-33 0-56.5-23.5T120-160v-640q0-33 23.5-56.5T200-880h320l240 240v100q-19-8-39-12.5t-41-6.5v-41H480v-200H200v640h241q16 24 36 44.5T521-80H200Zm460-120q42 0 71-29t29-71q0-42-29-71t-71-29q-42 0-71 29t-29 71q0 42 29 71t71 29ZM864-40 756-148q-21 14-45.5 21t-50.5 7q-75 0-127.5-52.5T480-300q0-75 52.5-127.5T660-480q75 0 127.5 52.5T840-300q0 26-7 50.5T812-204L920-96l-56 56Z" />
+                    </svg>
+                    {runScanLoading ? "Starting..." : ""}
+                  </button>
+                )}
+                <NavLink
+                  to="/reports"
+                  className={({ isActive }) =>
+                    `rounded-full border border-[var(--border)] bg-white px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
+                      isActive ? "bg-[var(--bg-mid)]" : ""
+                    }`
+                  }
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -476,69 +498,49 @@ export default function App({ children }: AppProps) {
                     className="w-4 h-4 flex-shrink-0"
                     fill="var(--brand)"
                   >
-                    <path d="M200-800v241-1 400-640 200-200Zm0 720q-33 0-56.5-23.5T120-160v-640q0-33 23.5-56.5T200-880h320l240 240v100q-19-8-39-12.5t-41-6.5v-41H480v-200H200v640h241q16 24 36 44.5T521-80H200Zm460-120q42 0 71-29t29-71q0-42-29-71t-71-29q-42 0-71 29t-29 71q0 42 29 71t71 29ZM864-40 756-148q-21 14-45.5 21t-50.5 7q-75 0-127.5-52.5T480-300q0-75 52.5-127.5T660-480q75 0 127.5 52.5T840-300q0 26-7 50.5T812-204L920-96l-56 56Z" />
+                    <path d="M280-280h80v-200h-80v200Zm320 0h80v-400h-80v400Zm-160 0h80v-120h-80v120Zm0-200h80v-80h-80v80ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z" />
                   </svg>
-                  {runScanLoading ? "Starting..." : ""}
-                </button>
-              )}
-              <NavLink
-                to="/reports"
-                className={({ isActive }) =>
-                  `rounded-full border border-[var(--border)] bg-white px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
-                    isActive ? "bg-[var(--bg-mid)]" : ""
-                  }`
-                }
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  height="16px"
-                  viewBox="0 -960 960 960"
-                  width="16px"
-                  className="w-4 h-4 flex-shrink-0"
-                  fill="var(--brand)"
+                </NavLink>
+                <NavLink
+                  to="/scheduling"
+                  className={({ isActive }) =>
+                    `rounded-full border border-[var(--border)] bg-white px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
+                      isActive ? "bg-[var(--bg-mid)]" : ""
+                    }`
+                  }
+                  title="Scheduling"
                 >
-                  <path d="M280-280h80v-200h-80v200Zm320 0h80v-400h-80v400Zm-160 0h80v-120h-80v120Zm0-200h80v-80h-80v80ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z" />
-                </svg>
-              </NavLink>
-              <NavLink
-                to="/scheduling"
-                className={({ isActive }) =>
-                  `rounded-full border border-[var(--border)] bg-white px-4 py-1.5 font-medium text-[var(--text-main)] hover:bg-[var(--bg-mid)] transition-colors flex items-center gap-2 ${
-                    isActive ? "bg-[var(--bg-mid)]" : ""
-                  }`
-                }
-                title="Scheduling"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  height="24px"
-                  viewBox="0 -960 960 960"
-                  width="24px"
-                  className="w-4 h-4 flex-shrink-0"
-                  fill="var(--brand)"
-                >
-                  <path d="M200-640h560v-80H200v80Zm0 0v-80 80Zm0 560q-33 0-56.5-23.5T120-160v-560q0-33 23.5-56.5T200-800h40v-80h80v80h320v-80h80v80h40q33 0 56.5 23.5T840-720v227q-19-9-39-15t-41-9v-43H200v400h252q7 22 16.5 42T491-80H200Zm520 40q-83 0-141.5-58.5T520-240q0-83 58.5-141.5T720-440q83 0 141.5 58.5T920-240q0 83-58.5 141.5T720-40Zm67-105 28-28-75-75v-112h-40v128l87 87Z" />
-                </svg>
-              </NavLink>
-              <ProfileMenu />
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    height="24px"
+                    viewBox="0 -960 960 960"
+                    width="24px"
+                    className="w-4 h-4 flex-shrink-0"
+                    fill="var(--brand)"
+                  >
+                    <path d="M200-640h560v-80H200v80Zm0 0v-80 80Zm0 560q-33 0-56.5-23.5T120-160v-560q0-33 23.5-56.5T200-800h40v-80h80v80h320v-80h80v80h40q33 0 56.5 23.5T840-720v227q-19-9-39-15t-41-9v-43H200v400h252q7 22 16.5 42T491-80H200Zm520 40q-83 0-141.5-58.5T520-240q0-83 58.5-141.5T720-440q83 0 141.5 58.5T920-240q0 83-58.5 141.5T720-40Zm67-105 28-28-75-75v-112h-40v128l87 87Z" />
+                  </svg>
+                </NavLink>
+                <ProfileMenu />
+              </div>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-10 space-y-10">
-        {children}
-      </main>
+        <main className="mx-auto max-w-6xl px-6 py-10 space-y-10">
+          {children}
+        </main>
 
-      {/* Toast notifications */}
-      <ToastContainer toasts={toasts} onRemove={removeToast} />
+        {/* Toast notifications */}
+        <ToastContainer toasts={toasts} onRemove={removeToast} />
 
-      {/* Scan configuration modal */}
-      <ScanConfigModal
-        isOpen={scanConfigOpen}
-        onConfirm={executeScan}
-        onCancel={() => setScanConfigOpen(false)}
-      />
+        {/* Scan configuration modal */}
+        <ScanConfigModal
+          isOpen={scanConfigOpen}
+          onConfirm={executeScan}
+          onCancel={() => setScanConfigOpen(false)}
+        />
+      </AirtableSchemaProvider>
     </div>
   );
 }

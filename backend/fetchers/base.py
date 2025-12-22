@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ..clients.airtable import AirtableClient
 
@@ -13,13 +12,10 @@ class BaseFetcher:
         self._client = client
         self._entity_key = entity_key
 
-    def fetch(self, incremental_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
-        """Fetch records, optionally filtered by lastModifiedTime.
-        
-        Args:
-            incremental_since: Optional datetime to filter records modified after this time.
+    def fetch(self) -> List[Dict[str, Any]]:
+        """Fetch all records for the entity.
         
         Returns:
             List of record dictionaries.
         """
-        return self._client.fetch_records(self._entity_key, incremental_since=incremental_since)
+        return self._client.fetch_records(self._entity_key)

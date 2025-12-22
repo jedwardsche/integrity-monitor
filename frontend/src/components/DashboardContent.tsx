@@ -1,8 +1,22 @@
-import { useMemo } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { useIntegrityMetrics } from "../hooks/useIntegrityMetrics";
 import type { RunHistoryItem } from "../hooks/useFirestoreRuns";
+import { useNewIssuesFromRecentRuns } from "../hooks/useFirestoreRuns";
 import { IssueList } from "./IssueList";
-import { getDataIssuesLink } from "../utils/airtable";
+import {
+  useFirestoreSchedules,
+  type Schedule,
+} from "../hooks/useFirestoreSchedules";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 
 type DashboardContentProps = {
   integrityMetrics: ReturnType<typeof useIntegrityMetrics>;
@@ -16,6 +30,246 @@ type DashboardContentProps = {
   onCloseRun: () => void;
 };
 
+const DAYS_OF_WEEK = [
+  { value: 0, label: "Sunday" },
+  { value: 1, label: "Monday" },
+  { value: 2, label: "Tuesday" },
+  { value: 3, label: "Wednesday" },
+  { value: 4, label: "Thursday" },
+  { value: 5, label: "Friday" },
+  { value: 6, label: "Saturday" },
+];
+
+function formatScheduleTime(timeOfDay: string): string {
+  const [hours, minutes] = timeOfDay.split(":").map(Number);
+  const date = new Date();
+  date.setHours(hours, minutes, 0);
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function ScheduleTooltip({
+  schedule,
+  children,
+}: {
+  schedule: Schedule;
+  children: React.ReactNode;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [mousePosition, setMousePosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+    maxHeight?: string;
+  }>({});
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+
+  // Track mouse position
+  const handleMouseMove = (e: React.MouseEvent) => {
+    setMousePosition({ x: e.clientX, y: e.clientY });
+  };
+
+  useEffect(() => {
+    if (isHovered && mousePosition && tooltipRef.current) {
+      // Use requestAnimationFrame to ensure tooltip is rendered before measuring
+      requestAnimationFrame(() => {
+        if (!tooltipRef.current || !mousePosition) return;
+
+        const tooltipRect = tooltipRef.current.getBoundingClientRect();
+        const viewportHeight = window.innerHeight;
+        const viewportWidth = window.innerWidth;
+        const padding = 8;
+        const cursorOffset = 12; // Offset from cursor
+
+        // Default: position below cursor
+        let top: number | undefined = mousePosition.y + cursorOffset;
+        let left: number | undefined = mousePosition.x;
+        let bottom: number | undefined;
+        let right: number | undefined;
+        let maxHeight: string | undefined;
+
+        // Check if tooltip would go below viewport
+        if (
+          top !== undefined &&
+          top + tooltipRect.height > viewportHeight - padding
+        ) {
+          // Position above cursor instead
+          top = undefined;
+          bottom = viewportHeight - mousePosition.y + cursorOffset;
+
+          // If it still doesn't fit above, constrain to viewport
+          if (
+            bottom !== undefined &&
+            bottom + tooltipRect.height > viewportHeight - padding
+          ) {
+            bottom = padding;
+            maxHeight = `${viewportHeight - padding * 2}px`;
+          }
+        }
+
+        // Check if tooltip would go right of viewport
+        if (
+          left !== undefined &&
+          left + tooltipRect.width > viewportWidth - padding
+        ) {
+          // Adjust to fit within viewport
+          left = viewportWidth - tooltipRect.width - padding;
+        }
+
+        // Ensure it doesn't go left of viewport
+        if (left !== undefined && left < padding) {
+          left = padding;
+        }
+
+        setTooltipPosition({
+          ...(top !== undefined && { top }),
+          ...(bottom !== undefined && { bottom }),
+          ...(left !== undefined && { left }),
+          ...(right !== undefined && { right }),
+          ...(maxHeight && { maxHeight }),
+        });
+      });
+    } else {
+      setTooltipPosition({});
+      setMousePosition(null);
+    }
+  }, [isHovered, mousePosition]);
+
+  // Format next run times
+  const nextRuns = useMemo(() => {
+    if (!schedule.next_run_at) return [];
+    const runs: Date[] = [];
+    let currentDate = schedule.next_run_at.toDate();
+
+    // Generate next 10 runs based on frequency
+    for (let i = 0; i < 10; i++) {
+      runs.push(new Date(currentDate));
+
+      if (schedule.frequency === "daily") {
+        currentDate = new Date(currentDate.getTime() + 24 * 60 * 60 * 1000);
+      } else if (
+        schedule.frequency === "weekly" &&
+        schedule.days_of_week &&
+        schedule.days_of_week.length > 0
+      ) {
+        // Add 7 days for weekly
+        currentDate = new Date(currentDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+      } else if (schedule.frequency === "hourly" && schedule.interval_minutes) {
+        currentDate = new Date(
+          currentDate.getTime() + schedule.interval_minutes * 60 * 1000
+        );
+      } else {
+        // Default to daily if unknown
+        currentDate = new Date(currentDate.getTime() + 24 * 60 * 60 * 1000);
+      }
+    }
+    return runs;
+  }, [schedule]);
+
+  const displayTimezone =
+    schedule.timezone === "America/Los_Angeles"
+      ? "America/Denver"
+      : schedule.timezone;
+
+  return (
+    <div
+      ref={triggerRef}
+      className="relative inline-block"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => {
+        setIsHovered(false);
+        setMousePosition(null);
+      }}
+      onMouseMove={handleMouseMove}
+    >
+      <span className="cursor-help underline decoration-dotted">
+        {children}
+      </span>
+      {isHovered && nextRuns.length > 0 && (
+        <div
+          ref={tooltipRef}
+          className="fixed z-[9999] w-64 bg-white border border-[var(--border)] rounded-lg shadow-xl p-3 overflow-y-auto"
+          style={{
+            top: tooltipPosition.top,
+            bottom: tooltipPosition.bottom,
+            left: tooltipPosition.left,
+            right: tooltipPosition.right,
+            maxHeight: tooltipPosition.maxHeight || "384px",
+          }}
+        >
+          <div className="text-xs font-semibold text-[var(--text-main)] mb-2 pb-2 border-b border-[var(--border)]">
+            Next 10 Runs
+          </div>
+          <div className="space-y-1.5">
+            {nextRuns.map((runDate, index) => (
+              <div
+                key={index}
+                className="text-xs text-[var(--text-muted)] py-1"
+              >
+                {runDate.toLocaleString("en-US", {
+                  timeZone: displayTimezone,
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                  hour12: true,
+                  timeZoneName: "short",
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatScheduleDescription(
+  runConfig: { entities?: string[]; mode?: string },
+  frequency: "daily" | "weekly" | "hourly" | "custom_times",
+  scheduleName: string
+): string {
+  // Check if mode is specified in run_config
+  if (runConfig.mode === "full") {
+    return "All records";
+  } else if (runConfig.mode === "incremental") {
+    return "Changed records only";
+  } else if (runConfig.mode === "sample") {
+    return "Sample validation";
+  }
+
+  // Infer from schedule name if mode not specified
+  const nameLower = scheduleName.toLowerCase();
+  if (nameLower.includes("full") || nameLower.includes("weekly")) {
+    return "All records";
+  } else if (
+    nameLower.includes("incremental") ||
+    nameLower.includes("nightly")
+  ) {
+    return "Changed records only";
+  } else if (nameLower.includes("sample") || nameLower.includes("kpi")) {
+    return "Sample validation";
+  }
+
+  // Default based on frequency if name doesn't provide clues
+  if (frequency === "daily") {
+    return "Changed records only";
+  } else if (frequency === "weekly") {
+    return "All records";
+  }
+  return "Scheduled run";
+}
+
 export function DashboardContent({
   integrityMetrics,
   selectedQueue,
@@ -25,6 +279,49 @@ export function DashboardContent({
 }: DashboardContentProps) {
   const { summary, runs, trends, queues, derived, flaggedRules } =
     integrityMetrics;
+
+  // Fetch enabled schedules
+  const { data: schedules, loading: schedulesLoading } =
+    useFirestoreSchedules();
+
+  // Fetch new issues count from last 3 runs
+  const { count: newIssuesCount, loading: newIssuesLoading } =
+    useNewIssuesFromRecentRuns(3);
+
+  // Filter and format enabled schedules for display
+  const displaySchedules = useMemo(() => {
+    if (!schedules) return [];
+
+    return schedules
+      .filter((schedule) => schedule.enabled)
+      .slice(0, 3) // Show max 3 schedules
+      .map((schedule) => {
+        const timeStr = formatScheduleTime(schedule.time_of_day);
+        const description = formatScheduleDescription(
+          schedule.run_config,
+          schedule.frequency,
+          schedule.name
+        );
+
+        // Format day/time display
+        let dayTimeDisplay = timeStr;
+        if (
+          schedule.frequency === "weekly" &&
+          schedule.days_of_week &&
+          schedule.days_of_week.length > 0
+        ) {
+          const dayName = DAYS_OF_WEEK[schedule.days_of_week[0]]?.label || "";
+          dayTimeDisplay = `${dayName} ${timeStr}`;
+        }
+
+        return {
+          id: schedule.id,
+          name: schedule.name,
+          dayTime: dayTimeDisplay,
+          description,
+        };
+      });
+  }, [schedules]);
 
   // Map queue titles to filter types
   const getQueueFilter = (
@@ -64,9 +361,7 @@ export function DashboardContent({
       });
       lastRunTime = `${timeStr} ${dateStr}`;
 
-      lastRunBadge =
-        "Frequency: " +
-        (summary.data.last_run?.mode === "full" ? "Weekly" : "Nightly");
+      lastRunBadge = "Frequency: Nightly";
       const duration = summary.data.last_run_duration;
       if (duration) {
         const minutes = Math.floor(duration / 60000);
@@ -89,6 +384,12 @@ export function DashboardContent({
         context: lastRunContext,
       },
       {
+        label: "New Issues",
+        value: newIssuesLoading ? "..." : newIssuesCount.toString(),
+        badge: "Last 3 scans",
+        context: "Issues discovered in recent runs",
+      },
+      {
         label: "Open Issues",
         value: totalIssues.toString(),
         badge:
@@ -104,7 +405,7 @@ export function DashboardContent({
         context: "Attendance + billing gaps",
       },
     ];
-  }, [summary, derived]);
+  }, [summary, derived, newIssuesCount, newIssuesLoading]);
 
   // Use real issue queues or empty array
   const issueQueues = queues.data || [];
@@ -115,27 +416,57 @@ export function DashboardContent({
   // Use real trend data or empty array
   const trendData = trends.data || [];
 
-  // Memoize trend chart calculations to avoid re-computing on every render
-  const trendChartData = useMemo(() => {
-    if (trendData.length === 0) return null;
-
-    const maxValue = Math.max(
-      ...trendData.flatMap((d) => [
-        d.duplicates || 0,
-        d.links || 0,
-        d.attendance || 0,
-      ]),
-      1
+  // Extract all unique issue types from the trend data to create lines
+  const issueTypes = useMemo(() => {
+    const types = Array.from(
+      new Set(
+        trendData.flatMap((item) =>
+          Object.keys(item).filter((key) => key !== "day")
+        )
+      )
     );
-    const scale = 120 / maxValue; // Max height is 120px
-
-    return trendData.map((day) => ({
-      day: day.day,
-      duplicatesHeight: Math.max(2, (day.duplicates || 0) * scale),
-      linksHeight: Math.max(2, (day.links || 0) * scale),
-      attendanceHeight: Math.max(2, (day.attendance || 0) * scale),
-    }));
+    return types;
   }, [trendData]);
+
+  // Color map for known issue types using dashboard theme colors
+  const colorMap: Record<string, string> = {
+    duplicates: "#3E716A", // brand color
+    duplicate: "#3E716A", // brand color
+    missing_link: "#6B9A94", // brand light
+    links: "#6B9A94", // brand light
+    attendance: "#3566A8", // blue from current bars
+    missing_field: "#10b981", // green
+    required_fields: "#10b981", // green
+  };
+
+  // Function to get color for a type (fallback to hash or gray if not known)
+  const getColor = (type: string): string => {
+    if (colorMap[type]) return colorMap[type];
+    // Simple hash for consistent colors for unknown types
+    let hash = 0;
+    for (let i = 0; i < type.length; i++) {
+      hash = type.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const c = (hash & 0x00ffffff).toString(16).toUpperCase();
+    return "#" + "00000".substring(0, 6 - c.length) + c;
+  };
+
+  // Function to format issue type name for display
+  const formatIssueTypeName = (type: string): string => {
+    const nameMap: Record<string, string> = {
+      duplicates: "Duplicates",
+      duplicate: "Duplicates",
+      missing_link: "Missing Links",
+      links: "Missing Links",
+      attendance: "Attendance",
+      missing_field: "Missing Fields",
+      required_fields: "Missing Fields",
+    };
+    return (
+      nameMap[type] ||
+      type.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
+    );
+  };
 
   // Calculate severity breakdown - aggregate from by_type_severity if by_severity is missing
   const bySeverity = summary.data?.summary?.by_severity || {};
@@ -206,35 +537,41 @@ export function DashboardContent({
         </div>
 
         <div className="w-full max-w-sm rounded-3xl border border-[var(--border)] bg-white p-6 shadow-[0_30px_60px_rgba(31,79,72,0.08)]">
-          <p className="text-sm text-[var(--text-muted)]">Run Schedule</p>
+          <p className="text-sm text-[var(--text-muted)]">Enabled Schedules</p>
           <div className="mt-4 space-y-4">
-            <div>
-              <p className="text-sm font-medium text-[var(--text-main)]">
-                Nightly Incremental
-              </p>
-              <p className="text-xs text-[var(--text-muted)] mt-1">
-                02:00 AM · Changed records only
-              </p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-[var(--text-main)]">
-                Weekly Full Scan
-              </p>
-              <p className="text-xs text-[var(--text-muted)] mt-1">
-                Sunday 03:00 AM · All records
-              </p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-[var(--text-main)]">
-                KPI Measurement
-              </p>
-              <p className="text-xs text-[var(--text-muted)] mt-1">
-                Sunday 04:00 AM · Sample validation
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-mid)]/80 px-4 py-3 text-xs text-[var(--text-muted)]">
-            Alerts sent to Slack + email on failures or threshold breaches.
+            {schedulesLoading ? (
+              <div className="text-center text-sm text-[var(--text-muted)] py-4">
+                Loading schedules...
+              </div>
+            ) : displaySchedules.length > 0 ? (
+              displaySchedules.map((displaySchedule) => {
+                const fullSchedule = schedules?.find(
+                  (s) => s.id === displaySchedule.id
+                );
+                return (
+                  <div key={displaySchedule.id}>
+                    {fullSchedule ? (
+                      <ScheduleTooltip schedule={fullSchedule}>
+                        <p className="text-sm font-medium text-[var(--text-main)]">
+                          {displaySchedule.name}
+                        </p>
+                      </ScheduleTooltip>
+                    ) : (
+                      <p className="text-sm font-medium text-[var(--text-main)]">
+                        {displaySchedule.name}
+                      </p>
+                    )}
+                    <p className="text-xs text-[var(--text-muted)] mt-1">
+                      {displaySchedule.dayTime} · {displaySchedule.description}
+                    </p>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-center text-sm text-[var(--text-muted)] py-4">
+                No enabled schedules configured
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -254,56 +591,71 @@ export function DashboardContent({
               On target
             </span>
           </div>
-          <div className="mt-5 grid grid-cols-7 gap-3">
-            {trendChartData ? (
-              trendChartData.map((day) => (
-                <div key={day.day} className="space-y-2">
-                  <div className="flex h-32 flex-col justify-end gap-1 rounded-2xl bg-[var(--bg-mid)]/70 p-1">
-                    <div
-                      className="rounded-full bg-[#3E716A]"
-                      style={{
-                        height: `${day.duplicatesHeight}px`,
-                      }}
-                    />
-                    <div
-                      className="rounded-full bg-[#6B9A94]"
-                      style={{
-                        height: `${day.linksHeight}px`,
-                      }}
-                    />
-                    <div
-                      className="rounded-full bg-[#3566A8]"
-                      style={{
-                        height: `${day.attendanceHeight}px`,
-                      }}
-                    />
-                  </div>
-                  <p className="text-center text-xs text-[var(--text-muted)]">
-                    {day.day}
-                  </p>
+          <div className="mt-5 h-80 w-full">
+            {trends.loading ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-sm text-[var(--text-muted)]">
+                  Loading trend data...
                 </div>
-              ))
-            ) : (
-              <div className="col-span-7 text-center text-sm text-[var(--text-muted)] py-8">
-                {trends.loading
-                  ? "Loading trend data..."
-                  : "No trend data available yet"}
               </div>
+            ) : trendData.length === 0 ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-sm text-[var(--text-muted)]">
+                  No trend data available yet
+                </div>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={trendData}
+                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    vertical={false}
+                    stroke="var(--border)"
+                  />
+                  <XAxis
+                    dataKey="day"
+                    stroke="var(--text-muted)"
+                    style={{ fontSize: "12px" }}
+                  />
+                  <YAxis
+                    stroke="var(--text-muted)"
+                    style={{ fontSize: "12px" }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "white",
+                      border: "1px solid var(--border)",
+                      borderRadius: "0.5rem",
+                      boxShadow:
+                        "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+                      color: "var(--text-main)",
+                    }}
+                    labelStyle={{ color: "var(--text-main)" }}
+                  />
+                  <Legend
+                    wrapperStyle={{
+                      fontSize: "12px",
+                      color: "var(--text-muted)",
+                    }}
+                  />
+                  {issueTypes.map((type) => (
+                    <Line
+                      key={type}
+                      type="monotone"
+                      dataKey={type}
+                      name={formatIssueTypeName(type)}
+                      stroke={getColor(type)}
+                      strokeWidth={2}
+                      dot={{ r: 4, fill: getColor(type) }}
+                      activeDot={{ r: 6, fill: getColor(type) }}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
             )}
-          </div>
-          <div className="mt-4 flex gap-4 text-xs text-[var(--text-muted)]">
-            <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-[#3E716A]" />
-              Duplicates
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-[#6B9A94]" />
-              Missing links
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-[#3566A8]" />
-              Attendance
-            </span>
           </div>
         </div>
 
@@ -357,20 +709,17 @@ export function DashboardContent({
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                Priority queues
-              </p>
-              <p className="text-lg font-semibold text-[var(--text-main)]">
-                Guided fixes
+                Grouped issues
               </p>
             </div>
-            <a
+            {/* <a
               href={getDataIssuesLink()}
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm font-medium text-[var(--cta-blue)] hover:underline"
             >
               Open in Airtable →
-            </a>
+            </a> */}
           </div>
           {selectedQueue ? (
             <div className="mt-4">
@@ -507,29 +856,14 @@ export function DashboardContent({
               </div>
             )}
           </div>
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-mid)]/80 px-4 py-3 text-sm text-[var(--text-muted)]">
-            View Cloud Run / Scheduler logs for retry attempts and alert
-            receipts.
-          </div>
         </div>
       </section>
 
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">
-              Issue drill-down
-            </p>
-            <p className="text-lg font-semibold">Pending anomalies</p>
+            <p className="text-lg font-semibold">All open issues</p>
           </div>
-          <a
-            href={getDataIssuesLink()}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-medium text-[var(--cta-blue)] hover:underline"
-          >
-            View in Airtable →
-          </a>
         </div>
         <div className="overflow-hidden rounded-3xl border border-[var(--border)] bg-white p-6">
           <IssueList />

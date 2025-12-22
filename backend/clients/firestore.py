@@ -156,7 +156,9 @@ class FirestoreClient:
             
             # Ensure timestamps are present
             data = payload.copy()
-            if "started_at" not in data:
+            # Only set started_at if it doesn't exist and we're not cancelling
+            # This prevents overwriting the original start time when cancelling
+            if "started_at" not in data and data.get("status") != "cancelled":
                 data["started_at"] = datetime.now(timezone.utc)
             if "ended_at" not in data and "status" in data and data["status"] != "running":
                 data["ended_at"] = datetime.now(timezone.utc)
@@ -201,50 +203,6 @@ class FirestoreClient:
                 exc_info=True,
             )
             raise
-
-    def get_last_successful_run_timestamp(self) -> Optional[datetime]:
-        """Get the timestamp of the most recent successful run.
-        
-        Returns:
-            datetime of the most recent successful run's ended_at, or None if no successful runs exist.
-        """
-        try:
-            if firestore is None:
-                return None
-            
-            client = self._get_client()
-            collection_ref = client.collection(self._config.runs_collection)
-            
-            # Query for most recent successful run
-            # Uses composite index: status (ASC) + ended_at (DESC)
-            query = (
-                collection_ref
-                .where("status", "==", "success")
-                .order_by("ended_at", direction="DESCENDING")
-                .limit(1)
-            )
-            docs = list(query.stream())
-
-            if docs:
-                doc_data = docs[0].to_dict()
-                ended_at = doc_data.get("ended_at")
-                if ended_at:
-                    # Convert Firestore timestamp to datetime if needed
-                    if hasattr(ended_at, "timestamp"):
-                        return datetime.fromtimestamp(ended_at.timestamp(), tz=timezone.utc)
-                    elif isinstance(ended_at, datetime):
-                        return ended_at
-                    else:
-                        return None
-            
-            return None
-        except Exception as exc:
-            logger.warning(
-                "Failed to get last successful run timestamp",
-                extra={"error": str(exc)},
-                exc_info=True,
-            )
-            return None
 
     def _generate_doc_id(self, issue: Dict[str, Any]) -> str:
         """Generate a Firestore document ID from an issue.
@@ -317,16 +275,19 @@ class FirestoreClient:
         
         return existing_ids
 
-    def record_issues(self, issues: list[Dict[str, Any]], progress_callback: Optional[Callable[[int, int, float], None]] = None) -> None:
+    def record_issues(self, issues: list[Dict[str, Any]], progress_callback: Optional[Callable[[int, int, float], None]] = None) -> tuple[int, int]:
         """Write individual issues to Firestore integrity_issues collection.
         
         Args:
             issues: List of issue dictionaries with rule_id, record_id, etc.
             progress_callback: Optional callback function(current, total, percentage) called after each batch
+            
+        Returns:
+            Tuple of (new_issues_count, total_issues_count)
         """
         if not issues:
             logger.info("No issues to write to Firestore")
-            return
+            return (0, 0)
         
         try:
             client = self._get_client()
@@ -359,7 +320,7 @@ class FirestoreClient:
                         progress_callback(len(issue_doc_pairs), len(issue_doc_pairs), 100.0)
                     except Exception:
                         pass
-                return
+                return (0, len(issue_doc_pairs))
             
             batch = client.batch()
             batch_count = 0
@@ -376,6 +337,10 @@ class FirestoreClient:
                 issue_data["updated_at"] = datetime.now(timezone.utc)
                 if "status" not in issue_data:
                     issue_data["status"] = "open"
+                
+                # Set first_seen_in_run for new issues (only if run_id is provided)
+                if "run_id" in issue_data and "first_seen_in_run" not in issue_data:
+                    issue_data["first_seen_in_run"] = issue_data["run_id"]
                 
                 batch.set(doc_ref, issue_data, merge=True)
                 batch_count += 1
@@ -427,6 +392,9 @@ class FirestoreClient:
                     "total_checked": len(issue_doc_pairs),
                 },
             )
+            
+            # Return counts: (new_issues_count, total_issues_count)
+            return (total_new_issues, len(issue_doc_pairs))
         except Exception as exc:
             logger.error(
                 "Failed to record issues",

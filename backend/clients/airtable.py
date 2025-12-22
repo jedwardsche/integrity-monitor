@@ -126,7 +126,6 @@ class AirtableClient:
         key: str,
         base_id: str,
         table_id: str,
-        incremental_since: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch records with retry logic and rate limiting."""
         self._throttle_request(base_id)
@@ -140,25 +139,13 @@ class AirtableClient:
                 "entity": key,
                 "base": base_id,
                 "table": table_id,
-                "since": incremental_since.isoformat() if incremental_since else None,
             },
         )
-
-        # Build formula for incremental fetching
-        formula = None
-        if incremental_since:
-            # Format: LAST_MODIFIED_TIME() > '2025-01-01T00:00:00.000Z'
-            timestamp_str = incremental_since.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            formula = f"LAST_MODIFIED_TIME() > '{timestamp_str}'"
 
         # Fetch all records with pagination
         records = []
         try:
-            if formula:
-                all_records = table.all(formula=formula)
-            else:
-                all_records = table.all()
-
+            all_records = table.all()
             records = all_records
 
             logger.info(
@@ -166,7 +153,6 @@ class AirtableClient:
                 extra={
                     "entity": key,
                     "record_count": len(records),
-                    "incremental": incremental_since is not None,
                 },
             )
 
@@ -188,13 +174,11 @@ class AirtableClient:
     def fetch_records(
         self,
         key: str,
-        incremental_since: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch records for the given logical entity.
 
         Args:
             key: Entity key (e.g., "students", "parents")
-            incremental_since: Optional datetime to filter by lastModifiedTime
 
         Returns:
             List of record dictionaries
@@ -204,7 +188,7 @@ class AirtableClient:
         table_id = table_meta["table_id"]
 
         try:
-            return self._fetch_with_retry(key, base_id, table_id, incremental_since)
+            return self._fetch_with_retry(key, base_id, table_id)
         except Exception as exc:
             logger.error(
                 "Failed to fetch Airtable records after retries",

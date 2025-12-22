@@ -6,11 +6,9 @@ import {
   ScanConfigModal,
   type ScanConfig,
 } from "../components/ScanConfigModal";
-<<<<<<< HEAD
 import { IssueList } from "../components/IssueList";
-=======
->>>>>>> edafeef0bd6d1b9e3177bcbdba40a24a66252c3e
 import { API_BASE } from "../config/api";
+import cancelButtonIcon from "../assets/cancel_button.svg";
 
 export function RunsPage() {
   const navigate = useNavigate();
@@ -18,7 +16,69 @@ export function RunsPage() {
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const { getToken } = useAuth();
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [scanConfigOpen, setScanConfigOpen] = useState(false);
+
+  const handleCancel = async (runId: string) => {
+    if (!runId || cancellingRunId) return;
+
+    setCancellingRunId(runId);
+    try {
+      const token = await getToken();
+      if (!token) {
+        alert("Authentication required. Please sign in again.");
+        setCancellingRunId(null);
+        return;
+      }
+
+      const response = await fetch(
+        `${API_BASE}/integrity/run/${runId}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = {
+            error: `Server returned ${response.status}: ${response.statusText}`,
+          };
+        }
+
+        const errorMessage =
+          errorData.detail?.error ||
+          errorData.detail?.message ||
+          errorData.error ||
+          errorData.message ||
+          `Failed to cancel run (${response.status})`;
+
+        throw new Error(errorMessage);
+      }
+
+      // Status will update via real-time subscription
+    } catch (error) {
+      console.error("Failed to cancel run:", error);
+      let errorMessage = "Failed to cancel run. Please try again.";
+
+      if (error instanceof TypeError && error.message.includes("fetch")) {
+        errorMessage =
+          "Backend server is not available. Please ensure the backend is running.";
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+
+      alert(errorMessage);
+    } finally {
+      setCancellingRunId(null);
+    }
+  };
 
   const handleDelete = async (runId: string) => {
     if (
@@ -96,11 +156,10 @@ export function RunsPage() {
     });
   };
 
-  const getTriggerLabel = (trigger: string, mode?: string) => {
+  const getTriggerLabel = (trigger: string) => {
     if (trigger === "manual") return "Manual";
     if (trigger === "nightly") return "Nightly";
     if (trigger === "weekly") return "Weekly";
-    if (mode === "full") return "Full Scan";
     return trigger || "Unknown";
   };
 
@@ -119,7 +178,6 @@ export function RunsPage() {
 
       const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
       const params = new URLSearchParams({
-        mode: config.mode,
         trigger: "manual",
       });
 
@@ -327,11 +385,7 @@ export function RunsPage() {
                         </div>
                         <div className="flex items-center gap-4 text-sm text-[var(--text-muted)]">
                           <span>
-                            Mode: {run.mode === "full" ? "Full" : "Incremental"}
-                          </span>
-                          <span>
-                            Trigger:{" "}
-                            {getTriggerLabel(run.trigger || "", run.mode)}
+                            Trigger: {getTriggerLabel(run.trigger || "")}
                           </span>
                           <span>Duration: {run.duration}</span>
                           {run.run_id && (
@@ -367,6 +421,31 @@ export function RunsPage() {
                           />
                         </svg>
                       </button>
+                      {isRunning && (run.run_id || run.id) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancel(run.run_id || run.id);
+                          }}
+                          disabled={cancellingRunId === (run.run_id || run.id)}
+                          className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          title="Cancel run"
+                        >
+                          {cancellingRunId === (run.run_id || run.id) ? (
+                            "Cancelling..."
+                          ) : (
+                            <img
+                              src={cancelButtonIcon}
+                              alt="Cancel"
+                              className="w-4 h-4"
+                              style={{
+                                filter:
+                                  "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(340deg) brightness(97%) contrast(95%)",
+                              }}
+                            />
+                          )}
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -508,13 +587,8 @@ export function RunsPage() {
                             started: {formatTimestamp(run.started_at)}
                           </div>
                           <div className="text-[var(--text-muted)]">
-                            <span className="text-blue-600">[INFO]</span> Mode:{" "}
-                            {run.mode || "incremental"}
-                          </div>
-                          <div className="text-[var(--text-muted)]">
                             <span className="text-blue-600">[INFO]</span>{" "}
-                            Trigger:{" "}
-                            {getTriggerLabel(run.trigger || "", run.mode)}
+                            Trigger: {getTriggerLabel(run.trigger || "")}
                           </div>
                           {endTime && (
                             <div className="text-[var(--text-muted)]">

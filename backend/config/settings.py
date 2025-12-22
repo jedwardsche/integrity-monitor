@@ -26,7 +26,6 @@ class AlertThresholds(BaseModel):
 
 
 class RunConfig(BaseModel):
-    incremental_default: bool = True
     nightly_cron: str
     weekly_cron: str
     alert_thresholds: AlertThresholds

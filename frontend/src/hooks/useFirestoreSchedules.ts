@@ -15,7 +15,6 @@ import { db } from "../config/firebase";
 import { useAuth } from "./useAuth";
 
 export interface ScheduleRunConfig {
-  mode: "incremental" | "full";
   entities?: string[];
 }
 

@@ -192,15 +192,6 @@ export async function generateRunReport(run: RunHistoryItem): Promise<Blob> {
   doc.roundedRect(xPos, yPos, boxWidth, 20, 2, 2, "F");
   doc.setTextColor(0, 0, 0);
   doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
-  doc.text("MODE", xPos + 5, yPos + 7);
-  doc.setFontSize(12);
-  doc.setFont("helvetica", "bold");
-  doc.text(
-    run.mode === "full" ? "Full Scan" : "Incremental",
-    xPos + 5,
-    yPos + 14
-  );
   xPos += boxWidth + 5;
 
   // Total Issues

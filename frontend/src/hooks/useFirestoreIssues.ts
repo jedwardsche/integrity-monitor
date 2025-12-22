@@ -25,6 +25,7 @@ export interface Issue {
   updated_at?: Date;
   status?: string;
   run_id?: string;
+  first_seen_in_run?: string;
 }
 
 export interface IssueFilters {
@@ -35,6 +36,7 @@ export interface IssueFilters {
   status?: string;
   search?: string;
   run_id?: string;
+  first_seen_in_run?: string;
 }
 
 const PAGE_SIZE = 100;
@@ -69,14 +71,18 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
       if (filters.run_id) {
         constraints.push(where("run_id", "==", filters.run_id));
       }
+      if (filters.first_seen_in_run) {
+        constraints.push(where("first_seen_in_run", "==", filters.first_seen_in_run));
+      }
       // Apply status filter only if explicitly set and not "all"
       if (filters.status && filters.status !== "all") {
         constraints.push(where("status", "==", filters.status));
-      } else if (filters.status === undefined) {
-        // Default to open issues when status is not provided (backward compatibility)
+      } else if (filters.status === undefined && !filters.run_id) {
+        // Default to open issues when status is not provided AND not filtering by run_id
+        // When filtering by run_id, show all issues from that run regardless of status
         constraints.push(where("status", "==", "open"));
       }
-      // If filters.status === "all", don't apply status filter (show all statuses)
+      // If filters.status === "all" OR filters.run_id is set (without explicit status), don't apply status filter (show all statuses)
 
       // Order by created_at desc
       constraints.push(orderBy("created_at", "desc"));
@@ -91,7 +97,7 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
 
       return query(issuesRef, ...constraints);
     },
-    [filters.type, filters.severity, filters.entity, filters.status, filters.run_id, pageSize]
+    [filters.type, filters.severity, filters.entity, filters.status, filters.run_id, filters.first_seen_in_run, pageSize]
   );
 
   const fetchPage = useCallback(
@@ -119,6 +125,7 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
             updated_at: data.updated_at?.toDate?.() || new Date(),
             status: data.status || "open",
             run_id: data.run_id,
+            first_seen_in_run: data.first_seen_in_run,
           };
         });
 
@@ -177,7 +184,7 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
     setCurrentPage(1);
     setHasPrev(false);
     fetchPage(null);
-  }, [filters.type, filters.severity, filters.entity, filters.status, filters.search, filters.run_id, fetchPage]);
+  }, [filters.type, filters.severity, filters.entity, filters.status, filters.search, filters.run_id, filters.first_seen_in_run, fetchPage]);
 
   const nextPage = useCallback(() => {
     if (!hasMore || !lastDocRef.current) return;
