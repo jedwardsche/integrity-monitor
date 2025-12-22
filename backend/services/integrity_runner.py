@@ -87,7 +87,7 @@ class IntegrityRunner:
         except: pass
         # #endregion agent log
         
-        self._schema_config = load_schema_config()
+        self._schema_config = load_schema_config(firestore_client=self._firestore_client)
         
         # #region agent log
         try:
@@ -331,9 +331,15 @@ class IntegrityRunner:
                     except: pass
                     # #endregion agent log
                 
-                # Reload runtime config to pick up new env vars
+                # Reload configs dynamically to get latest rules from Firestore
                 self._runtime_config = load_runtime_config(firestore_client=self._firestore_client, attempt_discovery=True)
+                self._schema_config = load_schema_config(firestore_client=self._firestore_client)
                 self._airtable_client = AirtableClient(self._runtime_config.airtable)
+                
+                logger.info(
+                    "Reloaded configs dynamically",
+                    extra={"run_id": run_id},
+                )
                 
             except Exception as exc:
                 logger.warning(
@@ -580,12 +586,14 @@ class IntegrityRunner:
                     if issues:
                         check_cancelled()  # Check before starting long write operation
                         try:
-                            self._firestore_writer.write_log(run_id, "info", f"Writing {len(merged):,} issues to Firestore...")
+                            total_issues_to_write = len(merged)
+                            self._firestore_writer.write_log(run_id, "info", f"Writing {total_issues_to_write:,} issues to Firestore...")
                             with timed("write_issues_firestore", metrics):
                                 new_issues_count = self._firestore_writer.write_issues(merged if issues else [], run_id=run_id)
                             write_issues_duration = metrics.get("duration_write_issues_firestore", 0)
-                            log_write(logger, run_id, "firestore_issues", len(merged) if issues else 0, write_issues_duration)
-                            self._firestore_writer.write_log(run_id, "info", f"Wrote {len(merged):,} issues to Firestore ({new_issues_count:,} new) in {(write_issues_duration/1000):.1f}s")
+                            updated_count = total_issues_to_write - new_issues_count
+                            log_write(logger, run_id, "firestore_issues", total_issues_to_write, write_issues_duration)
+                            self._firestore_writer.write_log(run_id, "info", f"Wrote {total_issues_to_write:,} issues to Firestore ({new_issues_count:,} new, {updated_count:,} updated) in {(write_issues_duration/1000):.1f}s")
                         except Exception as exc:
                             logger.error("Failed to write issues to Firestore", extra={"run_id": run_id}, exc_info=True)
                             try:

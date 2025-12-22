@@ -7,16 +7,7 @@ import {
   useFirestoreSchedules,
   type Schedule,
 } from "../hooks/useFirestoreSchedules";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts";
+import { IssueTrendChart } from "./IssueTrendChart";
 
 type DashboardContentProps = {
   integrityMetrics: ReturnType<typeof useIntegrityMetrics>;
@@ -416,58 +407,6 @@ export function DashboardContent({
   // Use real trend data or empty array
   const trendData = trends.data || [];
 
-  // Extract all unique issue types from the trend data to create lines
-  const issueTypes = useMemo(() => {
-    const types = Array.from(
-      new Set(
-        trendData.flatMap((item) =>
-          Object.keys(item).filter((key) => key !== "day")
-        )
-      )
-    );
-    return types;
-  }, [trendData]);
-
-  // Color map for known issue types using dashboard theme colors
-  const colorMap: Record<string, string> = {
-    duplicates: "#3E716A", // brand color
-    duplicate: "#3E716A", // brand color
-    missing_link: "#6B9A94", // brand light
-    links: "#6B9A94", // brand light
-    attendance: "#3566A8", // blue from current bars
-    missing_field: "#10b981", // green
-    required_fields: "#10b981", // green
-  };
-
-  // Function to get color for a type (fallback to hash or gray if not known)
-  const getColor = (type: string): string => {
-    if (colorMap[type]) return colorMap[type];
-    // Simple hash for consistent colors for unknown types
-    let hash = 0;
-    for (let i = 0; i < type.length; i++) {
-      hash = type.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const c = (hash & 0x00ffffff).toString(16).toUpperCase();
-    return "#" + "00000".substring(0, 6 - c.length) + c;
-  };
-
-  // Function to format issue type name for display
-  const formatIssueTypeName = (type: string): string => {
-    const nameMap: Record<string, string> = {
-      duplicates: "Duplicates",
-      duplicate: "Duplicates",
-      missing_link: "Missing Links",
-      links: "Missing Links",
-      attendance: "Attendance",
-      missing_field: "Missing Fields",
-      required_fields: "Missing Fields",
-    };
-    return (
-      nameMap[type] ||
-      type.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
-    );
-  };
-
   // Calculate severity breakdown - aggregate from by_type_severity if by_severity is missing
   const bySeverity = summary.data?.summary?.by_severity || {};
   const byTypeSeverity = summary.data?.summary?.by_type_severity || {};
@@ -591,71 +530,12 @@ export function DashboardContent({
               On target
             </span>
           </div>
-          <div className="mt-5 h-80 w-full">
-            {trends.loading ? (
-              <div className="h-full flex items-center justify-center">
-                <div className="text-sm text-[var(--text-muted)]">
-                  Loading trend data...
-                </div>
-              </div>
-            ) : trendData.length === 0 ? (
-              <div className="h-full flex items-center justify-center">
-                <div className="text-sm text-[var(--text-muted)]">
-                  No trend data available yet
-                </div>
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={trendData}
-                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    vertical={false}
-                    stroke="var(--border)"
-                  />
-                  <XAxis
-                    dataKey="day"
-                    stroke="var(--text-muted)"
-                    style={{ fontSize: "12px" }}
-                  />
-                  <YAxis
-                    stroke="var(--text-muted)"
-                    style={{ fontSize: "12px" }}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "white",
-                      border: "1px solid var(--border)",
-                      borderRadius: "0.5rem",
-                      boxShadow:
-                        "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
-                      color: "var(--text-main)",
-                    }}
-                    labelStyle={{ color: "var(--text-main)" }}
-                  />
-                  <Legend
-                    wrapperStyle={{
-                      fontSize: "12px",
-                      color: "var(--text-muted)",
-                    }}
-                  />
-                  {issueTypes.map((type) => (
-                    <Line
-                      key={type}
-                      type="monotone"
-                      dataKey={type}
-                      name={formatIssueTypeName(type)}
-                      stroke={getColor(type)}
-                      strokeWidth={2}
-                      dot={{ r: 4, fill: getColor(type) }}
-                      activeDot={{ r: 6, fill: getColor(type) }}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            )}
+          <div className="mt-5">
+            <IssueTrendChart
+              data={trendData}
+              loading={trends.loading}
+              error={trends.error}
+            />
           </div>
         </div>
 

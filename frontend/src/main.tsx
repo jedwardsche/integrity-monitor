@@ -14,6 +14,7 @@ import { RunsPage } from "./pages/RunsPage";
 import { IssueDetailPage } from "./pages/IssueDetailPage";
 import { IssuesPage } from "./pages/IssuesPage";
 import { SchedulingPage } from "./pages/SchedulingPage";
+import { RulesPage } from "./pages/RulesPage";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -97,6 +98,16 @@ createRoot(document.getElementById("root")!).render(
               <AuthGuard>
                 <App>
                   <SchedulingPage />
+                </App>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/rules"
+            element={
+              <AuthGuard>
+                <App>
+                  <RulesPage />
                 </App>
               </AuthGuard>
             }

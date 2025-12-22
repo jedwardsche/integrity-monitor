@@ -107,7 +107,17 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
 
       try {
         const q = buildQuery(cursor);
+        console.log('[useFirestoreIssues] Query filters:', {
+          type: filters.type,
+          severity: filters.severity,
+          entity: filters.entity,
+          status: filters.status,
+          run_id: filters.run_id,
+          first_seen_in_run: filters.first_seen_in_run,
+          search: filters.search,
+        });
         const snapshot = await getDocs(q);
+        console.log('[useFirestoreIssues] Query returned', snapshot.docs.length, 'documents');
 
         let transformed: Issue[] = snapshot.docs.map((doc) => {
           const data = doc.data();
@@ -167,9 +177,15 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
           userMessage = "Quota exceeded. Please try again later.";
         } else if (errorCode === "unavailable" || errorCode === "deadline-exceeded") {
           userMessage = "Service temporarily unavailable. Please try again.";
+        } else if (errorCode === "failed-precondition") {
+          userMessage = "Missing Firestore index. Check console for details.";
         }
 
-        console.error("Firestore query error:", errorCode, err.message);
+        console.error("[useFirestoreIssues] Firestore query error:", {
+          code: errorCode,
+          message: err.message,
+          filters: filters,
+        });
         setError(userMessage);
       } finally {
         setLoading(false);

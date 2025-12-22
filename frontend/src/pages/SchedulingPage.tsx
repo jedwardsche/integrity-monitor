@@ -1,5 +1,5 @@
 import { useState, useMemo, Fragment, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Timestamp, deleteField } from "firebase/firestore";
 import { useFirestoreScheduleGroups } from "../hooks/useFirestoreScheduleGroups";
 import { useFirestoreSchedules } from "../hooks/useFirestoreSchedules";
@@ -404,7 +404,8 @@ function NextRunTooltip({
 
         // Default: position above cursor
         let top: number | undefined;
-        let bottom: number | undefined = viewportHeight - mousePosition.y + cursorOffset;
+        let bottom: number | undefined =
+          viewportHeight - mousePosition.y + cursorOffset;
         let left: number | undefined = mousePosition.x;
 
         // Check if tooltip would go above viewport
@@ -494,6 +495,7 @@ function NextRunTooltip({
 
 export function SchedulingPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const {
     data: groups,
@@ -516,6 +518,10 @@ export function SchedulingPage() {
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState<string | null>(null);
   const [expandedSchedule, setExpandedSchedule] = useState<string | null>(null);
+  const [highlightedScheduleId, setHighlightedScheduleId] = useState<
+    string | null
+  >(null);
+  const scheduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
   const [deletingScheduleId, setDeletingScheduleId] = useState<string | null>(
     null
@@ -542,6 +548,36 @@ export function SchedulingPage() {
     if (!selectedGroupId) return schedules;
     return schedules.filter((s) => s.group_id === selectedGroupId);
   }, [schedules, selectedGroupId]);
+
+  // Handle scheduleId query parameter
+  useEffect(() => {
+    const scheduleId = searchParams.get("scheduleId");
+    if (scheduleId && schedules.length > 0) {
+      const schedule = schedules.find((s) => s.id === scheduleId);
+      if (schedule) {
+        // Set the group filter to show this schedule
+        setSelectedGroupId(schedule.group_id);
+        // Expand the schedule
+        setExpandedSchedule(scheduleId);
+        // Highlight it
+        setHighlightedScheduleId(scheduleId);
+        // Scroll to it after a brief delay to allow rendering
+        setTimeout(() => {
+          const ref = scheduleRefs.current[scheduleId];
+          if (ref) {
+            ref.scrollIntoView({ behavior: "smooth", block: "center" });
+            // Remove highlight after 3 seconds
+            setTimeout(() => {
+              setHighlightedScheduleId(null);
+              // Remove query parameter
+              searchParams.delete("scheduleId");
+              setSearchParams(searchParams, { replace: true });
+            }, 3000);
+          }
+        }, 100);
+      }
+    }
+  }, [searchParams, schedules, setSearchParams]);
 
   const handleCreateGroup = async () => {
     try {
@@ -989,7 +1025,16 @@ export function SchedulingPage() {
               <tbody>
                 {filteredSchedules.map((schedule) => (
                   <Fragment key={schedule.id}>
-                    <tr className="border-b border-[var(--border)] hover:bg-[var(--bg-mid)]/30 transition-colors">
+                    <tr
+                      ref={(el) => {
+                        scheduleRefs.current[schedule.id] = el;
+                      }}
+                      className={`border-b border-[var(--border)] hover:bg-[var(--bg-mid)]/30 transition-colors ${
+                        highlightedScheduleId === schedule.id
+                          ? "bg-[var(--cta-blue)]/10 border-l-4 border-[var(--cta-blue)]"
+                          : ""
+                      }`}
+                    >
                       <td className="py-3 px-4">
                         <div className="font-medium text-[var(--text-main)]">
                           {schedule.name}
@@ -1073,11 +1118,30 @@ export function SchedulingPage() {
                             Edit
                           </button>
                           <button
-                            onClick={() =>
-                              updateSchedule(schedule.id, {
-                                enabled: !schedule.enabled,
-                              })
-                            }
+                            onClick={() => {
+                              const newEnabled = !schedule.enabled;
+                              const updates: any = { enabled: newEnabled };
+
+                              // If re-enabling, recalculate next_run_at based on current time
+                              if (newEnabled) {
+                                updates.next_run_at = computeNextRunAt(
+                                  schedule.frequency,
+                                  schedule.time_of_day,
+                                  schedule.timezone,
+                                  schedule.frequency === "weekly"
+                                    ? schedule.days_of_week
+                                    : undefined,
+                                  schedule.frequency === "hourly"
+                                    ? schedule.interval_minutes
+                                    : undefined,
+                                  schedule.frequency === "custom_times"
+                                    ? schedule.times_of_day
+                                    : undefined
+                                );
+                              }
+
+                              updateSchedule(schedule.id, updates);
+                            }}
                             className="px-3 py-1.5 text-sm font-medium text-[var(--text-muted)] hover:bg-[var(--bg-mid)] rounded-lg transition-colors"
                           >
                             {schedule.enabled ? "Disable" : "Enable"}

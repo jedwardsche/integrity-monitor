@@ -1,10 +1,13 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRunStatus } from "../hooks/useRunStatus";
 import { useRunLogs } from "../hooks/useRunLogs";
 import { useAuth } from "../hooks/useAuth";
 import { API_BASE } from "../config/api";
 import { IssueList } from "../components/IssueList";
+import { collection, query, where, getDocs, limit } from "firebase/firestore";
+import { db } from "../config/firebase";
+import { doc, getDoc } from "firebase/firestore";
 
 export function RunStatusPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -13,6 +16,13 @@ export function RunStatusPage() {
   const { logs, loading: logsLoading } = useRunLogs(runId || null);
   const { getToken } = useAuth();
   const [isCancelling, setIsCancelling] = useState(false);
+  const [activeIssueTab, setActiveIssueTab] = useState<"new" | "all">("new");
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const [scheduleInfo, setScheduleInfo] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   // Calculate isRunning safely - will be false if runStatus is not available yet
   const statusLower = runStatus?.status?.toLowerCase() || "";
@@ -26,6 +36,70 @@ export function RunStatusPage() {
       statusLower !== "healthy" &&
       statusLower !== "critical"
     : false;
+
+  // Handle auto-scroll for logs - only scroll if user is at bottom
+  useEffect(() => {
+    if (!logsContainerRef.current || !shouldAutoScrollRef.current) return;
+
+    const container = logsContainerRef.current;
+    const isAtBottom =
+      container.scrollHeight - container.scrollTop <=
+      container.clientHeight + 10;
+
+    if (isAtBottom && logs.length > 0) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [logs]);
+
+  // Track scroll position to determine if we should auto-scroll
+  const handleLogsScroll = () => {
+    if (!logsContainerRef.current) return;
+    const container = logsContainerRef.current;
+    const isAtBottom =
+      container.scrollHeight - container.scrollTop <=
+      container.clientHeight + 10;
+    shouldAutoScrollRef.current = isAtBottom;
+  };
+
+  // Fetch schedule info if trigger is "schedule"
+  useEffect(() => {
+    if (!runId || runStatus?.trigger !== "schedule") {
+      setScheduleInfo(null);
+      return;
+    }
+
+    const fetchScheduleInfo = async () => {
+      try {
+        // Find schedule_execution with this run_id
+        const executionsRef = collection(db, "schedule_executions");
+        const q = query(executionsRef, where("run_id", "==", runId), limit(1));
+        const snapshot = await getDocs(q);
+
+        if (!snapshot.empty) {
+          const execution = snapshot.docs[0].data();
+          const scheduleId = execution.schedule_id;
+
+          if (scheduleId) {
+            // Fetch schedule document
+            const scheduleRef = doc(db, "schedules", scheduleId);
+            const scheduleDoc = await getDoc(scheduleRef);
+
+            if (scheduleDoc.exists()) {
+              const scheduleData = scheduleDoc.data();
+              setScheduleInfo({
+                id: scheduleId,
+                name: scheduleData.name || "Unnamed Schedule",
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching schedule info:", error);
+      }
+    };
+
+    fetchScheduleInfo();
+  }, [runId, runStatus?.trigger]);
 
   if (loading) {
     return (
@@ -273,13 +347,33 @@ export function RunStatusPage() {
           <div>
             <div className="text-xs text-[var(--text-muted)] mb-1">Trigger</div>
             <div className="font-medium text-[var(--text-main)]">
-              {runStatus.trigger === "manual"
-                ? "Manual"
-                : runStatus.trigger === "nightly"
-                ? "Nightly"
-                : runStatus.trigger === "weekly"
-                ? "Weekly"
-                : runStatus.trigger || "Unknown"}
+              {runStatus.trigger === "schedule" && scheduleInfo ? (
+                <a
+                  href={`/scheduling?scheduleId=${scheduleInfo.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(`/scheduling?scheduleId=${scheduleInfo.id}`);
+                  }}
+                  className="text-[var(--cta-blue)] hover:underline cursor-pointer"
+                >
+                  {scheduleInfo.name}
+                </a>
+              ) : runStatus.trigger === "manual" ? (
+                "Manual Run"
+              ) : runStatus.trigger === "nightly" ? (
+                "Nightly Scan"
+              ) : runStatus.trigger === "weekly" ? (
+                "Weekly Scan"
+              ) : runStatus.trigger === "schedule" ? (
+                "Scheduled Run"
+              ) : runStatus.trigger ? (
+                runStatus.trigger
+                  .split("_")
+                  .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                  .join(" ")
+              ) : (
+                "Unknown"
+              )}
             </div>
           </div>
           <div>
@@ -535,17 +629,65 @@ export function RunStatusPage() {
         </div>
       )}
 
-      {/* Run completion info */}
-      {!isRunning && runStatus.ended_at && (
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-mid)]/30 p-4 mb-6">
-          <p className="text-sm text-[var(--text-muted)]">
-            <strong>When runs end:</strong> A run completes when all stages
-            finish (fetching records, running checks, writing results). The run
-            ends automatically when the scan finishes, or if an error occurs.
-            Long-running scans are normal for large datasets.
-          </p>
-        </div>
-      )}
+      {/* Issues from This Run */}
+      {(!isRunning ||
+        statusLower === "cancelled" ||
+        statusLower === "canceled") &&
+        runId && (
+          <div className="rounded-2xl border border-[var(--border)] bg-white p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2
+                className="text-lg font-semibold text-[var(--text-main)]"
+                style={{ fontFamily: "Outfit" }}
+              >
+                Issues from This Run
+              </h2>
+            </div>
+            {/* Tabs */}
+            <div className="flex gap-2 mb-4 border-b border-[var(--border)]">
+              <button
+                onClick={() => setActiveIssueTab("new")}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  activeIssueTab === "new"
+                    ? "text-[var(--cta-blue)] border-b-2 border-[var(--cta-blue)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                }`}
+              >
+                New Issues
+              </button>
+              <button
+                onClick={() => setActiveIssueTab("all")}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  activeIssueTab === "all"
+                    ? "text-[var(--cta-blue)] border-b-2 border-[var(--cta-blue)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                }`}
+              >
+                All Issues
+              </button>
+            </div>
+            {/* Tab Content */}
+            {activeIssueTab === "new" ? (
+              <IssueList
+                key="new-issues"
+                filters={{
+                  run_id: runId,
+                  first_seen_in_run: runId,
+                  status: "all",
+                }}
+              />
+            ) : (
+              <IssueList
+                key="all-issues"
+                filters={{ run_id: runId, status: "all" }}
+              />
+            )}
+            {/* Debug info */}
+            <div className="text-xs text-gray-400 mt-2">
+              Debug: runId = {runId || "undefined"}
+            </div>
+          </div>
+        )}
 
       {/* Real-time Logs */}
       <div className="rounded-2xl border border-[var(--border)] bg-white p-6">
@@ -563,7 +705,11 @@ export function RunStatusPage() {
           )}
         </div>
 
-        <div className="bg-[var(--bg-dark)] rounded-lg border border-[var(--border)] p-4 font-mono text-sm max-h-[600px] overflow-y-auto">
+        <div
+          ref={logsContainerRef}
+          onScroll={handleLogsScroll}
+          className="bg-[var(--bg-dark)] rounded-lg border border-[var(--border)] p-4 font-mono text-sm max-h-[600px] overflow-y-auto"
+        >
           {logs.length === 0 && !logsLoading && (
             <div className="text-[var(--text-muted)] text-center py-8">
               No logs available yet
@@ -600,43 +746,6 @@ export function RunStatusPage() {
           })}
         </div>
       </div>
-
-      {/* Issues from This Run */}
-      {(!isRunning ||
-        statusLower === "cancelled" ||
-        statusLower === "canceled") &&
-        runId && (
-          <>
-            <div className="rounded-2xl border border-[var(--border)] bg-white p-6 mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2
-                  className="text-lg font-semibold text-[var(--text-main)]"
-                  style={{ fontFamily: "Outfit" }}
-                >
-                  New Issues from This Run
-                </h2>
-              </div>
-              <IssueList
-                filters={{
-                  run_id: runId,
-                  first_seen_in_run: runId,
-                  status: "all",
-                }}
-              />
-            </div>
-            <div className="rounded-2xl border border-[var(--border)] bg-white p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2
-                  className="text-lg font-semibold text-[var(--text-main)]"
-                  style={{ fontFamily: "Outfit" }}
-                >
-                  Issues from This Run
-                </h2>
-              </div>
-              <IssueList filters={{ run_id: runId, status: "all" }} />
-            </div>
-          </>
-        )}
     </div>
   );
 }

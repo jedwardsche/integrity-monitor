@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useFirestoreRuns } from "../hooks/useFirestoreRuns";
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
 import {
   ScanConfigModal,
@@ -10,14 +10,179 @@ import { IssueList } from "../components/IssueList";
 import { API_BASE } from "../config/api";
 import cancelButtonIcon from "../assets/cancel_button.svg";
 
+const RUNS_PER_PAGE = 25;
+
 export function RunsPage() {
   const navigate = useNavigate();
-  const { data: runs, loading, error } = useFirestoreRuns(100);
+  const { data: runs, loading, error } = useFirestoreRuns(1000);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const { getToken } = useAuth();
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [scanConfigOpen, setScanConfigOpen] = useState(false);
+
+  // Filter state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [triggerFilter, setTriggerFilter] = useState("all");
+  const [durationFilter, setDurationFilter] = useState("all");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    searchQuery,
+    statusFilter,
+    triggerFilter,
+    durationFilter,
+    startDate,
+    endDate,
+  ]);
+
+  // Filter and paginate runs
+  const { filteredRuns, paginatedRuns, totalPages, startIndex, endIndex } =
+    useMemo(() => {
+      let filtered = [...runs];
+
+      // Search filter (case-insensitive)
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        filtered = filtered.filter((run) => {
+          const runId = (run.run_id || run.id || "").toLowerCase();
+          const trigger = (run.trigger || "").toLowerCase();
+          const status = (run.status || "").toLowerCase();
+          return (
+            runId.includes(query) ||
+            trigger.includes(query) ||
+            status.includes(query)
+          );
+        });
+      }
+
+      // Status filter
+      if (statusFilter !== "all") {
+        filtered = filtered.filter((run) => {
+          const status = (run.status || "").toLowerCase();
+          const statusLower = statusFilter.toLowerCase();
+          if (statusLower === "healthy") {
+            return status === "healthy" || status === "success";
+          }
+          if (statusLower === "cancelled") {
+            return status === "cancelled" || status === "canceled";
+          }
+          return status === statusLower;
+        });
+      }
+
+      // Trigger filter
+      if (triggerFilter !== "all") {
+        filtered = filtered.filter((run) => {
+          const trigger = (run.trigger || "").toLowerCase();
+          return trigger === triggerFilter.toLowerCase();
+        });
+      }
+
+      // Duration filter
+      if (durationFilter !== "all") {
+        filtered = filtered.filter((run) => {
+          if (!run.duration_ms) return false;
+          const minutes = run.duration_ms / 60000;
+
+          switch (durationFilter) {
+            case "<1m":
+              return minutes < 1;
+            case "1-5m":
+              return minutes >= 1 && minutes < 5;
+            case "5-15m":
+              return minutes >= 5 && minutes < 15;
+            case "15-30m":
+              return minutes >= 15 && minutes < 30;
+            case ">30m":
+              return minutes >= 30;
+            default:
+              return true;
+          }
+        });
+      }
+
+      // Date range filter
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        filtered = filtered.filter((run) => {
+          if (!run.started_at) return false;
+          const runDate =
+            run.started_at?.toDate?.() || new Date(run.started_at);
+          runDate.setHours(0, 0, 0, 0);
+          return runDate >= start;
+        });
+      }
+
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filtered = filtered.filter((run) => {
+          if (!run.started_at) return false;
+          const runDate =
+            run.started_at?.toDate?.() || new Date(run.started_at);
+          return runDate <= end;
+        });
+      }
+
+      // Pagination
+      const total = Math.ceil(filtered.length / RUNS_PER_PAGE) || 1;
+      const start = (currentPage - 1) * RUNS_PER_PAGE;
+      const end = start + RUNS_PER_PAGE;
+      const paginated = filtered.slice(start, end);
+
+      return {
+        filteredRuns: filtered,
+        paginatedRuns: paginated,
+        totalPages: total,
+        startIndex: start,
+        endIndex: end,
+      };
+    }, [
+      runs,
+      searchQuery,
+      statusFilter,
+      triggerFilter,
+      durationFilter,
+      startDate,
+      endDate,
+      currentPage,
+    ]);
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("all");
+    setTriggerFilter("all");
+    setDurationFilter("all");
+    setStartDate("");
+    setEndDate("");
+    setCurrentPage(1);
+  };
+
+  const hasActiveFilters = useMemo(() => {
+    return (
+      searchQuery.trim() !== "" ||
+      statusFilter !== "all" ||
+      triggerFilter !== "all" ||
+      durationFilter !== "all" ||
+      startDate !== "" ||
+      endDate !== ""
+    );
+  }, [
+    searchQuery,
+    statusFilter,
+    triggerFilter,
+    durationFilter,
+    startDate,
+    endDate,
+  ]);
 
   const handleCancel = async (runId: string) => {
     if (!runId || cancellingRunId) return;
@@ -327,6 +492,151 @@ export function RunsPage() {
         </button>
       </div>
 
+      {/* Filter Section */}
+      <div className="bg-white border border-[var(--border)] rounded-xl p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-[var(--text-main)]">
+            Filters
+          </h2>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="text-sm text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
+            >
+              Clear all filters
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Search Input */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+              Search
+            </label>
+            <input
+              type="text"
+              placeholder="Search by run ID, trigger, or status..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+            />
+          </div>
+
+          {/* Status Filter */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+              Status
+            </label>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+            >
+              <option value="all">All Statuses</option>
+              <option value="Healthy">Healthy</option>
+              <option value="Error">Error</option>
+              <option value="Warning">Warning</option>
+              <option value="Critical">Critical</option>
+              <option value="Running">Running</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
+          </div>
+
+          {/* Trigger Filter */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+              Trigger
+            </label>
+            <select
+              value={triggerFilter}
+              onChange={(e) => setTriggerFilter(e.target.value)}
+              className="w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+            >
+              <option value="all">All Triggers</option>
+              <option value="manual">Manual</option>
+              <option value="nightly">Nightly</option>
+              <option value="weekly">Weekly</option>
+              <option value="schedule">Schedule</option>
+            </select>
+          </div>
+
+          {/* Duration Filter */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+              Duration
+            </label>
+            <select
+              value={durationFilter}
+              onChange={(e) => setDurationFilter(e.target.value)}
+              className="w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+            >
+              <option value="all">All Durations</option>
+              <option value="<1m">&lt;1 minute</option>
+              <option value="1-5m">1-5 minutes</option>
+              <option value="5-15m">5-15 minutes</option>
+              <option value="15-30m">15-30 minutes</option>
+              <option value=">30m">&gt;30 minutes</option>
+            </select>
+          </div>
+
+          {/* Start Date */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+              Start Date
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="flex-1 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+              />
+              {startDate && (
+                <button
+                  onClick={() => setStartDate("")}
+                  className="px-2 text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                  title="Clear start date"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* End Date */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+              End Date
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="flex-1 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-main)]"
+              />
+              {endDate && (
+                <button
+                  onClick={() => setEndDate("")}
+                  className="px-2 text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                  title="Clear end date"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Results count */}
+        <div className="text-sm text-[var(--text-muted)] pt-2 border-t border-[var(--border)]">
+          Showing {filteredRuns.length}{" "}
+          {filteredRuns.length === 1 ? "run" : "runs"}
+          {hasActiveFilters && ` (filtered from ${runs.length} total)`}
+        </div>
+      </div>
+
       {runs.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-[var(--text-muted)]">No runs found.</p>
@@ -334,81 +644,173 @@ export function RunsPage() {
             Run a scan to generate your first run.
           </p>
         </div>
+      ) : filteredRuns.length === 0 ? (
+        <div className="text-center py-12">
+          <p className="text-[var(--text-muted)]">
+            No runs match your filters.
+          </p>
+          <p className="text-sm text-[var(--text-muted)] mt-2">
+            Try adjusting your search criteria or{" "}
+            <button
+              onClick={clearFilters}
+              className="text-[var(--brand)] hover:underline"
+            >
+              clear all filters
+            </button>
+            .
+          </p>
+        </div>
       ) : (
-        <div className="space-y-4">
-          {runs.map((run) => {
-            const isExpanded = expandedRun === run.id;
-            const startTime =
-              run.started_at?.toDate?.() ||
-              new Date(run.started_at || Date.now());
-            const endTime = run.ended_at?.toDate?.() || null;
-            const statusLower = (run.status || "").toLowerCase();
-            const isRunning =
-              (!endTime || run.status === "running") &&
-              statusLower !== "cancelled" &&
-              statusLower !== "canceled" &&
-              statusLower !== "success" &&
-              statusLower !== "error" &&
-              statusLower !== "warning" &&
-              statusLower !== "healthy" &&
-              statusLower !== "critical";
+        <>
+          <div className="space-y-4">
+            {paginatedRuns.map((run) => {
+              const isExpanded = expandedRun === run.id;
+              const startTime =
+                run.started_at?.toDate?.() ||
+                new Date(run.started_at || Date.now());
+              const endTime = run.ended_at?.toDate?.() || null;
+              const statusLower = (run.status || "").toLowerCase();
+              const isRunning =
+                (!endTime || run.status === "running") &&
+                statusLower !== "cancelled" &&
+                statusLower !== "canceled" &&
+                statusLower !== "success" &&
+                statusLower !== "error" &&
+                statusLower !== "warning" &&
+                statusLower !== "healthy" &&
+                statusLower !== "critical";
 
-            return (
-              <div
-                key={run.id}
-                className="rounded-xl border border-[var(--border)] bg-white overflow-hidden"
-              >
+              return (
                 <div
-                  className="p-4 cursor-pointer hover:bg-[var(--bg-mid)]/30 transition-colors"
-                  onClick={() => setExpandedRun(isExpanded ? null : run.id)}
+                  key={run.id}
+                  className="rounded-xl border border-[var(--border)] bg-white overflow-hidden"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4 flex-1">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <span
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(
-                              run.status
-                            )}`}
-                          >
-                            {statusLower === "cancelled" ||
-                            statusLower === "canceled"
-                              ? "Cancelled"
-                              : run.status}
-                          </span>
-                          {isRunning && (
-                            <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
-                          )}
-                          <span className="text-sm text-[var(--text-muted)]">
-                            {formatTimestamp(run.started_at)}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-4 text-sm text-[var(--text-muted)]">
-                          <span>
-                            Trigger: {getTriggerLabel(run.trigger || "")}
-                          </span>
-                          <span>Duration: {run.duration}</span>
-                          {run.run_id && (
-                            <span className="font-mono text-xs">
-                              ID: {run.run_id.substring(0, 8)}...
+                  <div
+                    className="p-4 cursor-pointer hover:bg-[var(--bg-mid)]/30 transition-colors"
+                    onClick={() => setExpandedRun(isExpanded ? null : run.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4 flex-1">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(
+                                run.status
+                              )}`}
+                            >
+                              {statusLower === "cancelled" ||
+                              statusLower === "canceled"
+                                ? "Cancelled"
+                                : run.status}
                             </span>
-                          )}
+                            {isRunning && (
+                              <span className="inline-block h-2 w-2 rounded-full bg-[var(--brand)] animate-pulse"></span>
+                            )}
+                            <span className="text-sm text-[var(--text-muted)]">
+                              {formatTimestamp(run.started_at)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-4 text-sm text-[var(--text-muted)]">
+                            <span>
+                              Trigger: {getTriggerLabel(run.trigger || "")}
+                            </span>
+                            <span>Duration: {run.duration}</span>
+                            {run.run_id && (
+                              <span className="font-mono text-xs">
+                                ID: {run.run_id.substring(0, 8)}...
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (run.run_id) {
-                            navigate(`/run/${run.run_id}`);
-                          }
-                        }}
-                        className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-sm font-medium text-[var(--brand)] hover:bg-[var(--brand)]/5 transition-colors flex items-center gap-2"
-                      >
-                        View Details
+                      <div className="flex items-center gap-4">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (run.run_id) {
+                              navigate(`/run/${run.run_id}`);
+                            }
+                          }}
+                          className="rounded-full border border-[var(--brand)] px-4 py-1.5 text-sm font-medium text-[var(--brand)] hover:bg-[var(--brand)]/5 transition-colors flex items-center gap-2"
+                        >
+                          View Details
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 5l7 7-7 7"
+                            />
+                          </svg>
+                        </button>
+                        {isRunning && (run.run_id || run.id) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCancel(run.run_id || run.id);
+                            }}
+                            disabled={
+                              cancellingRunId === (run.run_id || run.id)
+                            }
+                            className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                            title="Cancel run"
+                          >
+                            {cancellingRunId === (run.run_id || run.id) ? (
+                              "Cancelling..."
+                            ) : (
+                              <img
+                                src={cancelButtonIcon}
+                                alt="Cancel"
+                                className="w-4 h-4"
+                                style={{
+                                  filter:
+                                    "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(340deg) brightness(97%) contrast(95%)",
+                                }}
+                              />
+                            )}
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (run.run_id || run.id) {
+                              handleDelete(run.run_id || run.id);
+                            }
+                          }}
+                          disabled={deletingRunId === (run.run_id || run.id)}
+                          className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          title="Delete run"
+                        >
+                          {deletingRunId === (run.run_id || run.id) ? (
+                            "Deleting..."
+                          ) : (
+                            <>
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                />
+                              </svg>
+                              Delete
+                            </>
+                          )}
+                        </button>
                         <svg
-                          className="w-4 h-4"
+                          className={`w-5 h-5 text-[var(--text-muted)] transition-transform ${
+                            isExpanded ? "rotate-180" : ""
+                          }`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -417,226 +819,225 @@ export function RunsPage() {
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             strokeWidth={2}
-                            d="M9 5l7 7-7 7"
+                            d="M19 9l-7 7-7-7"
                           />
                         </svg>
-                      </button>
-                      {isRunning && (run.run_id || run.id) && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancel(run.run_id || run.id);
-                          }}
-                          disabled={cancellingRunId === (run.run_id || run.id)}
-                          className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                          title="Cancel run"
-                        >
-                          {cancellingRunId === (run.run_id || run.id) ? (
-                            "Cancelling..."
-                          ) : (
-                            <img
-                              src={cancelButtonIcon}
-                              alt="Cancel"
-                              className="w-4 h-4"
-                              style={{
-                                filter:
-                                  "brightness(0) saturate(100%) invert(27%) sepia(96%) saturate(2598%) hue-rotate(340deg) brightness(97%) contrast(95%)",
-                              }}
-                            />
-                          )}
-                        </button>
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (run.run_id || run.id) {
-                            handleDelete(run.run_id || run.id);
-                          }
-                        }}
-                        disabled={deletingRunId === (run.run_id || run.id)}
-                        className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                        title="Delete run"
-                      >
-                        {deletingRunId === (run.run_id || run.id) ? (
-                          "Deleting..."
-                        ) : (
-                          <>
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                              />
-                            </svg>
-                            Delete
-                          </>
-                        )}
-                      </button>
-                      <svg
-                        className={`w-5 h-5 text-[var(--text-muted)] transition-transform ${
-                          isExpanded ? "rotate-180" : ""
-                        }`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 9l-7 7-7-7"
-                        />
-                      </svg>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {isExpanded && (
-                  <div className="border-t border-[var(--border)] bg-[var(--bg-mid)]/20 p-4 space-y-4">
-                    {/* Status Details and Issues Found - Side by Side */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {/* Status Details */}
-                      <div>
-                        <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
-                          Status Details
-                        </h3>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
-                          <div>
-                            <div className="text-[var(--text-muted)] text-xs mb-1">
-                              Started
-                            </div>
-                            <div className="text-[var(--text-main)] font-medium">
-                              {formatTimestamp(run.started_at)}
-                            </div>
-                          </div>
-                          {endTime && (
+                  {isExpanded && (
+                    <div className="border-t border-[var(--border)] bg-[var(--bg-mid)]/20 p-4 space-y-4">
+                      {/* Status Details and Issues Found - Side by Side */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        {/* Status Details */}
+                        <div>
+                          <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
+                            Status Details
+                          </h3>
+                          <div className="grid grid-cols-2 gap-3 text-sm">
                             <div>
                               <div className="text-[var(--text-muted)] text-xs mb-1">
-                                Ended
+                                Started
                               </div>
                               <div className="text-[var(--text-main)] font-medium">
-                                {formatTimestamp(run.ended_at)}
+                                {formatTimestamp(run.started_at)}
+                              </div>
+                            </div>
+                            {endTime && (
+                              <div>
+                                <div className="text-[var(--text-muted)] text-xs mb-1">
+                                  Ended
+                                </div>
+                                <div className="text-[var(--text-main)] font-medium">
+                                  {formatTimestamp(run.ended_at)}
+                                </div>
+                              </div>
+                            )}
+                            <div>
+                              <div className="text-[var(--text-muted)] text-xs mb-1">
+                                Duration
+                              </div>
+                              <div className="text-[var(--text-main)] font-medium">
+                                {run.duration_ms
+                                  ? `${Math.floor(
+                                      run.duration_ms / 60000
+                                    )}m ${Math.floor(
+                                      (run.duration_ms % 60000) / 1000
+                                    )}s`
+                                  : run.duration}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[var(--text-muted)] text-xs mb-1">
+                                Run ID
+                              </div>
+                              <div className="text-[var(--text-main)] font-mono text-xs">
+                                {run.run_id || run.id}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Issues Found */}
+                        {!isRunning &&
+                          statusLower !== "cancelled" &&
+                          statusLower !== "canceled" && (
+                            <div>
+                              <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
+                                Issues Found
+                                {run.counts?.total !== undefined && (
+                                  <span className="ml-2 text-[var(--text-muted)] font-normal">
+                                    ({run.counts.total.toLocaleString()})
+                                  </span>
+                                )}
+                              </h3>
+                              <div className="bg-white rounded-lg border border-[var(--border)] max-h-[400px] overflow-y-auto">
+                                <IssueList
+                                  filters={{
+                                    run_id: run.run_id || run.id,
+                                    status: "open",
+                                  }}
+                                />
                               </div>
                             </div>
                           )}
-                          <div>
-                            <div className="text-[var(--text-muted)] text-xs mb-1">
-                              Duration
-                            </div>
-                            <div className="text-[var(--text-main)] font-medium">
-                              {run.duration_ms
-                                ? `${Math.floor(
-                                    run.duration_ms / 60000
-                                  )}m ${Math.floor(
-                                    (run.duration_ms % 60000) / 1000
-                                  )}s`
-                                : run.duration}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-[var(--text-muted)] text-xs mb-1">
-                              Run ID
-                            </div>
-                            <div className="text-[var(--text-main)] font-mono text-xs">
-                              {run.run_id || run.id}
-                            </div>
-                          </div>
-                        </div>
                       </div>
 
-                      {/* Issues Found */}
-                      {!isRunning &&
-                        statusLower !== "cancelled" &&
-                        statusLower !== "canceled" && (
-                          <div>
-                            <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
-                              Issues Found
-                              {run.counts?.total !== undefined && (
-                                <span className="ml-2 text-[var(--text-muted)] font-normal">
-                                  ({run.counts.total.toLocaleString()})
-                                </span>
-                              )}
-                            </h3>
-                            <div className="bg-white rounded-lg border border-[var(--border)] max-h-[400px] overflow-y-auto">
-                              <IssueList
-                                filters={{
-                                  run_id: run.run_id || run.id,
-                                  status: "open",
-                                }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                    </div>
-
-                    {/* Log Details */}
-                    <div>
-                      <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
-                        Log Details
-                      </h3>
-                      <div className="bg-white rounded-lg border border-[var(--border)] p-3 font-mono text-xs">
-                        <div className="space-y-1">
-                          <div className="text-[var(--text-muted)]">
-                            <span className="text-blue-600">[INFO]</span> Run
-                            started: {formatTimestamp(run.started_at)}
-                          </div>
-                          <div className="text-[var(--text-muted)]">
-                            <span className="text-blue-600">[INFO]</span>{" "}
-                            Trigger: {getTriggerLabel(run.trigger || "")}
-                          </div>
-                          {endTime && (
+                      {/* Log Details */}
+                      <div>
+                        <h3 className="text-sm font-semibold text-[var(--text-main)] mb-2">
+                          Log Details
+                        </h3>
+                        <div className="bg-white rounded-lg border border-[var(--border)] p-3 font-mono text-xs">
+                          <div className="space-y-1">
                             <div className="text-[var(--text-muted)]">
-                              <span className="text-green-600">[INFO]</span> Run
-                              completed: {formatTimestamp(run.ended_at)}
+                              <span className="text-blue-600">[INFO]</span> Run
+                              started: {formatTimestamp(run.started_at)}
                             </div>
-                          )}
-                          {run.status === "error" && (
-                            <div className="text-red-600">
-                              <span className="text-red-600">[ERROR]</span> Run
-                              failed
+                            <div className="text-[var(--text-muted)]">
+                              <span className="text-blue-600">[INFO]</span>{" "}
+                              Trigger: {getTriggerLabel(run.trigger || "")}
                             </div>
-                          )}
-                          {run.status === "critical" && (
-                            <div className="text-red-600">
-                              <span className="text-red-600">[CRITICAL]</span>{" "}
-                              Critical issues found
-                            </div>
-                          )}
-                          {run.status === "warning" && (
-                            <div className="text-yellow-600">
-                              <span className="text-yellow-600">[WARN]</span>{" "}
-                              Run completed with warnings
-                            </div>
-                          )}
-                          {(run.status === "success" ||
-                            run.status === "Healthy") && (
-                            <div className="text-green-600">
-                              <span className="text-green-600">[SUCCESS]</span>{" "}
-                              Run completed successfully
-                            </div>
-                          )}
-                          {(statusLower === "cancelled" ||
-                            statusLower === "canceled") && (
-                            <div className="text-gray-600">
-                              <span className="text-gray-600">[CANCELLED]</span>{" "}
-                              Run was cancelled
-                            </div>
-                          )}
+                            {endTime && (
+                              <div className="text-[var(--text-muted)]">
+                                <span className="text-green-600">[INFO]</span>{" "}
+                                Run completed: {formatTimestamp(run.ended_at)}
+                              </div>
+                            )}
+                            {run.status === "error" && (
+                              <div className="text-red-600">
+                                <span className="text-red-600">[ERROR]</span>{" "}
+                                Run failed
+                              </div>
+                            )}
+                            {run.status === "critical" && (
+                              <div className="text-red-600">
+                                <span className="text-red-600">[CRITICAL]</span>{" "}
+                                Critical issues found
+                              </div>
+                            )}
+                            {run.status === "warning" && (
+                              <div className="text-yellow-600">
+                                <span className="text-yellow-600">[WARN]</span>{" "}
+                                Run completed with warnings
+                              </div>
+                            )}
+                            {(run.status === "success" ||
+                              run.status === "Healthy") && (
+                              <div className="text-green-600">
+                                <span className="text-green-600">
+                                  [SUCCESS]
+                                </span>{" "}
+                                Run completed successfully
+                              </div>
+                            )}
+                            {(statusLower === "cancelled" ||
+                              statusLower === "canceled") && (
+                              <div className="text-gray-600">
+                                <span className="text-gray-600">
+                                  [CANCELLED]
+                                </span>{" "}
+                                Run was cancelled
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="bg-white border border-[var(--border)] rounded-xl p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-[var(--text-muted)]">
+                  Showing {startIndex + 1}-
+                  {Math.min(endIndex, filteredRuns.length)} of{" "}
+                  {filteredRuns.length}{" "}
+                  {filteredRuns.length === 1 ? "run" : "runs"}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    First
+                  </button>
+                  <button
+                    onClick={() =>
+                      setCurrentPage((prev) => Math.max(1, prev - 1))
+                    }
+                    disabled={currentPage === 1}
+                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <div className="flex items-center gap-2 px-3">
+                    <span className="text-sm text-[var(--text-main)]">
+                      Page{" "}
+                      <input
+                        type="number"
+                        min={1}
+                        max={totalPages}
+                        value={currentPage}
+                        onChange={(e) => {
+                          const page = parseInt(e.target.value, 10);
+                          if (page >= 1 && page <= totalPages) {
+                            setCurrentPage(page);
+                          }
+                        }}
+                        className="w-16 px-2 py-1 text-center border border-[var(--border)] rounded-lg text-sm text-[var(--text-main)]"
+                      />{" "}
+                      of {totalPages}
+                    </span>
                   </div>
-                )}
+                  <button
+                    onClick={() =>
+                      setCurrentPage((prev) => Math.min(totalPages, prev + 1))
+                    }
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1.5 text-sm font-medium text-[var(--text-main)] border border-[var(--border)] rounded-lg hover:bg-[var(--bg-mid)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Last
+                  </button>
+                </div>
               </div>
-            );
-          })}
-        </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Scan configuration modal */}
