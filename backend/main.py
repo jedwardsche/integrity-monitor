@@ -1402,6 +1402,52 @@ def get_rules_by_category(category: str, request: Request):
             detail={"error": "Failed to get rules", "message": str(exc)},
         )
 
+class ParseRuleRequest(BaseModel):
+    """Request body for parsing a rule with AI."""
+    description: str
+    category_hint: Optional[str] = None
+
+
+@app.post("/rules/ai-parse")
+def parse_rule_with_ai(
+    body: ParseRuleRequest,
+    request: Request,
+    user: dict = Depends(verify_firebase_token),
+):
+    """Parse natural language rule description into structured format."""
+    try:
+        request_id = getattr(request.state, "request_id", None)
+
+        logger.info(
+            "AI parse request received",
+            extra={
+                "description_length": len(body.description) if body.description else 0,
+                "has_category_hint": body.category_hint is not None,
+                "request_id": request_id,
+            },
+        )
+
+        parser = AIRuleParser()
+        result = parser.parse(body.description, body.category_hint)
+
+        logger.info(
+            "Parsed rule with AI",
+            extra={"category": result.get("category"), "request_id": request_id},
+        )
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to parse rule with AI",
+            extra={"error": str(exc), "request_id": getattr(request.state, "request_id", None)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to parse rule", "message": str(exc)},
+        )
 
 class CreateRuleRequest(BaseModel):
     """Request body for creating a rule."""
@@ -1563,45 +1609,3 @@ def delete_rule(
         )
 
 
-class ParseRuleRequest(BaseModel):
-    """Request body for parsing a rule with AI."""
-    description: str
-    category_hint: Optional[str] = None
-
-
-@app.post("/rules/ai-parse", dependencies=[Depends(verify_firebase_token)])
-def parse_rule_with_ai(body: ParseRuleRequest, request: Request):
-    """Parse natural language rule description into structured format."""
-    try:
-        request_id = getattr(request.state, "request_id", None)
-
-        logger.info(
-            "AI parse request received",
-            extra={
-                "description_length": len(body.description) if body.description else 0,
-                "has_category_hint": body.category_hint is not None,
-                "request_id": request_id,
-            },
-        )
-
-        parser = AIRuleParser()
-        result = parser.parse(body.description, body.category_hint)
-
-        logger.info(
-            "Parsed rule with AI",
-            extra={"category": result.get("category"), "request_id": request_id},
-        )
-
-        return result
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(
-            "Failed to parse rule with AI",
-            extra={"error": str(exc), "request_id": getattr(request.state, "request_id", None)},
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "Failed to parse rule", "message": str(exc)},
-        )

@@ -20,6 +20,7 @@ ENV_FILE="../backend/.env"
 SECRETS=(
     "AIRTABLE_PAT"
     "API_AUTH_TOKEN"
+    "OPENAI_API_KEY"
 )
 
 echo "Creating secrets in Secret Manager for project: ${PROJECT_ID}"

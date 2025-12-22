@@ -193,6 +193,7 @@ if [ "$DEPLOY_BACKEND" = true ]; then
     REQUIRED_SECRETS=(
         "AIRTABLE_PAT"
         "API_AUTH_TOKEN"
+        "OPENAI_API_KEY"
     )
     
     MISSING_SECRETS=()
@@ -275,6 +276,7 @@ if [ "$DEPLOY_BACKEND" = true ]; then
         "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
         "--set-secrets" "AIRTABLE_PAT=AIRTABLE_PAT:latest"
         "--set-secrets" "API_AUTH_TOKEN=API_AUTH_TOKEN:latest"
+        "--set-secrets" "OPENAI_API_KEY=OPENAI_API_KEY:latest"
         "--project" "$PROJECT_ID"
     )
 
@@ -307,6 +309,7 @@ if [ "$DEPLOY_BACKEND" = true ]; then
             "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
             "--set-secrets" "AIRTABLE_PAT=AIRTABLE_PAT:latest"
             "--set-secrets" "API_AUTH_TOKEN=API_AUTH_TOKEN:latest"
+            "--set-secrets" "OPENAI_API_KEY=OPENAI_API_KEY:latest"
             "--project" "$PROJECT_ID"
         )
         "${DEPLOY_CMD[@]}"

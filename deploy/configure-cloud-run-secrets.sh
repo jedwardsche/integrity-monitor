@@ -26,7 +26,7 @@ echo ""
 
 # Check if secrets exist
 echo "Verifying secrets exist in Secret Manager..."
-SECRETS=("AIRTABLE_PAT" "API_AUTH_TOKEN")
+SECRETS=("AIRTABLE_PAT" "API_AUTH_TOKEN" "OPENAI_API_KEY")
 MISSING_SECRETS=()
 
 for secret in "${SECRETS[@]}"; do
@@ -49,11 +49,38 @@ fi
 echo "✅ All required secrets found in Secret Manager"
 echo ""
 
+# Check service account permissions
+echo "Checking service account permissions..."
+SERVICE_ACCOUNT=$(gcloud run services describe "${SERVICE_NAME}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(spec.template.spec.serviceAccountName)" 2>/dev/null || echo "")
+if [ -z "$SERVICE_ACCOUNT" ]; then
+    SERVICE_ACCOUNT="${PROJECT_ID}-compute@developer.gserviceaccount.com"
+fi
+echo "Service Account: ${SERVICE_ACCOUNT}"
+echo ""
+
+# Grant secret access if needed
+for secret in "${SECRETS[@]}"; do
+    if ! gcloud secrets get-iam-policy "$secret" --project="$PROJECT_ID" 2>/dev/null | grep -q "${SERVICE_ACCOUNT}"; then
+        echo "Granting access to ${secret}..."
+        gcloud secrets add-iam-policy-binding "$secret" \
+            --member="serviceAccount:${SERVICE_ACCOUNT}" \
+            --role="roles/secretmanager.secretAccessor" \
+            --project="${PROJECT_ID}" &>/dev/null
+        echo "   ✓ Access granted"
+    fi
+done
+echo ""
+
 # Update Cloud Run service with secret references
 echo "Updating Cloud Run service with secret references..."
+echo "⚠️  Note: This will create a new revision. If deployment fails, check logs:"
+echo "   ./troubleshoot-cloud-run.sh"
+echo ""
+
 gcloud run services update "${SERVICE_NAME}" \
   --update-secrets=AIRTABLE_PAT=AIRTABLE_PAT:latest \
   --update-secrets=API_AUTH_TOKEN=API_AUTH_TOKEN:latest \
+  --update-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
   --region="${REGION}" \
   --project="${PROJECT_ID}"
 
@@ -63,5 +90,6 @@ echo ""
 echo "Secrets are now injected as environment variables:"
 echo "  - AIRTABLE_PAT"
 echo "  - API_AUTH_TOKEN"
+echo "  - OPENAI_API_KEY"
 echo ""
 echo "The service will automatically restart with the new configuration."
