@@ -90,13 +90,82 @@ export function useIssueActions() {
     }
   };
 
-  const bulkDeleteIssues = async (filters: {
+  const countBulkDeleteIssues = async (filters: {
     issueTypes?: string[];
     entities?: string[];
     dateRange: "past_hour" | "past_day" | "past_week" | "custom" | "all";
     customStartDate?: string;
     customEndDate?: string;
-  }) => {
+  }): Promise<number> => {
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Not authenticated");
+
+      const userDoc = await getDoc(doc(db, "users", user.uid));
+      if (!userDoc.exists() || !userDoc.data()?.isAdmin) {
+        throw new Error("Unauthorized: Admin access required");
+      }
+
+      const token = await user.getIdToken();
+
+      const params = new URLSearchParams();
+      params.append("date_range", filters.dateRange);
+      
+      if (filters.issueTypes && filters.issueTypes.length > 0) {
+        filters.issueTypes.forEach((type) => {
+          params.append("issue_types", type);
+        });
+      }
+      
+      if (filters.entities && filters.entities.length > 0) {
+        filters.entities.forEach((entity) => {
+          params.append("entities", entity);
+        });
+      }
+      
+      if (filters.dateRange === "custom") {
+        if (filters.customStartDate) {
+          const startDate = new Date(filters.customStartDate);
+          params.append("custom_start_date", startDate.toISOString());
+        }
+        if (filters.customEndDate) {
+          const endDate = new Date(filters.customEndDate);
+          params.append("custom_end_date", endDate.toISOString());
+        }
+      }
+
+      const response = await fetch(`${API_BASE}/integrity/issues/bulk/count?${params.toString()}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: "Failed to count issues" }));
+        throw new Error(errorData.error || "Failed to count issues");
+      }
+
+      const result = await response.json();
+      return result.count || 0;
+    } catch (err) {
+      throw err instanceof Error ? err : new Error("Failed to count issues");
+    }
+  };
+
+  const bulkDeleteIssues = async (
+    filters: {
+      issueTypes?: string[];
+      entities?: string[];
+      dateRange: "past_hour" | "past_day" | "past_week" | "custom" | "all";
+      customStartDate?: string;
+      customEndDate?: string;
+    },
+    onProgress?: (current: number, total: number) => void
+  ) => {
     setLoading(true);
     setError(null);
     try {
@@ -171,6 +240,7 @@ export function useIssueActions() {
     markIgnored,
     deleteIssue,
     bulkDeleteIssues,
+    countBulkDeleteIssues,
     loading,
     error,
   };

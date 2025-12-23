@@ -12,6 +12,9 @@ interface IssueCounts {
   open: number;
   closed: number;
   resolved: number;
+  critical: number;
+  warning: number;
+  info: number;
 }
 
 export function useIssueCounts() {
@@ -20,6 +23,9 @@ export function useIssueCounts() {
     open: 0,
     closed: 0,
     resolved: 0,
+    critical: 0,
+    warning: 0,
+    info: 0,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,19 +38,47 @@ export function useIssueCounts() {
         const issuesRef = collection(db, "integrity_issues");
 
         // Run all count queries in parallel
-        const [allResult, openResult, closedResult, resolvedResult] =
-          await Promise.all([
-            getCountFromServer(query(issuesRef)),
-            getCountFromServer(
-              query(issuesRef, where("status", "==", "open"))
-            ),
-            getCountFromServer(
-              query(issuesRef, where("status", "==", "closed"))
-            ),
-            getCountFromServer(
-              query(issuesRef, where("status", "==", "resolved"))
-            ),
-          ]);
+        const [
+          allResult,
+          openResult,
+          closedResult,
+          resolvedResult,
+          criticalResult,
+          warningResult,
+          infoResult,
+        ] = await Promise.all([
+          getCountFromServer(query(issuesRef)),
+          getCountFromServer(
+            query(issuesRef, where("status", "==", "open"))
+          ),
+          getCountFromServer(
+            query(issuesRef, where("status", "==", "closed"))
+          ),
+          getCountFromServer(
+            query(issuesRef, where("status", "==", "resolved"))
+          ),
+          getCountFromServer(
+            query(
+              issuesRef,
+              where("status", "==", "open"),
+              where("severity", "==", "critical")
+            )
+          ),
+          getCountFromServer(
+            query(
+              issuesRef,
+              where("status", "==", "open"),
+              where("severity", "==", "warning")
+            )
+          ),
+          getCountFromServer(
+            query(
+              issuesRef,
+              where("status", "==", "open"),
+              where("severity", "==", "info")
+            )
+          ),
+        ]);
 
         if (!cancelled) {
           setCounts({
@@ -53,6 +87,9 @@ export function useIssueCounts() {
             closed:
               closedResult.data().count + resolvedResult.data().count,
             resolved: resolvedResult.data().count,
+            critical: criticalResult.data().count,
+            warning: warningResult.data().count,
+            info: infoResult.data().count,
           });
           setError(null);
         }

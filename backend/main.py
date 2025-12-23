@@ -1133,6 +1133,105 @@ def delete_integrity_issue(issue_id: str, request: Request):
         )
 
 
+@app.get("/integrity/issues/bulk/count", dependencies=[Depends(verify_firebase_token)])
+def count_bulk_delete_issues(
+    request: Request,
+    date_range: str = Query(...),
+    issue_types: Optional[List[str]] = Query(None),
+    entities: Optional[List[str]] = Query(None),
+    custom_start_date: Optional[str] = Query(None),
+    custom_end_date: Optional[str] = Query(None),
+):
+    """Count issues that would be deleted by bulk delete operation.
+    
+    Uses the same filters as bulk_delete_issues to return the count.
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    
+    try:
+        from .clients.firestore import FirestoreClient
+        from .config.config_loader import load_runtime_config
+        from datetime import datetime, timedelta, timezone
+        
+        config = load_runtime_config()
+        firestore_client = FirestoreClient(config.firestore)
+        client = firestore_client._get_client()
+        issues_ref = client.collection(config.firestore.issues_collection)
+        
+        # Build base query with date filter (same logic as bulk_delete)
+        query = issues_ref
+        
+        if date_range == "all":
+            pass
+        elif date_range == "past_hour":
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            query = query.where("created_at", ">=", cutoff)
+        elif date_range == "past_day":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            query = query.where("created_at", ">=", cutoff)
+        elif date_range == "past_week":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            query = query.where("created_at", ">=", cutoff)
+        elif date_range == "custom":
+            if not custom_start_date or not custom_end_date:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": "custom_start_date and custom_end_date required for custom date range"},
+                )
+            try:
+                start_date = datetime.fromisoformat(custom_start_date.replace("Z", "+00:00"))
+                end_date = datetime.fromisoformat(custom_end_date.replace("Z", "+00:00"))
+                query = query.where("created_at", ">=", start_date).where("created_at", "<=", end_date)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": f"Invalid date format: {str(e)}"},
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"Invalid date_range: {date_range}"},
+            )
+        
+        # Count matching documents (client-side filtering for types/entities)
+        all_docs = query.stream()
+        count = 0
+        has_type_filter = issue_types and len(issue_types) > 0
+        has_entity_filter = entities and len(entities) > 0
+        
+        for doc in all_docs:
+            data = doc.to_dict()
+            matches = False
+            
+            if not has_type_filter and not has_entity_filter:
+                matches = True
+            else:
+                if has_type_filter and data.get("issue_type") in issue_types:
+                    matches = True
+                if has_entity_filter and data.get("entity") in entities:
+                    matches = True
+            
+            if matches:
+                count += 1
+        
+        return {
+            "status": "success",
+            "count": count,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to count bulk delete issues",
+            extra={"error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to count issues", "message": str(exc)},
+        )
+
+
 @app.delete("/integrity/issues/bulk", dependencies=[Depends(verify_firebase_token)])
 def bulk_delete_issues(
     request: Request,
@@ -1252,17 +1351,6 @@ def bulk_delete_issues(
                     batch.commit()
                     batch = client.batch()
                     batch_count = 0
-        
-        # Delete in batches of 500
-        for doc in docs_to_delete:
-            batch.delete(doc.reference)
-            batch_count += 1
-            deleted_count += 1
-            
-            if batch_count >= 500:
-                batch.commit()
-                batch = client.batch()
-                batch_count = 0
         
         # Commit remaining deletions
         if batch_count > 0:

@@ -338,8 +338,9 @@ export function DashboardContent({
     // Firestore count shows actual unique open issues
     const totalIssues = issueCountsLoading ? 0 : issueCounts.open;
     const bySeverity = summary.data?.summary?.by_severity || {};
-    const criticalCount =
-      derived.data?.critical_records || bySeverity.critical || 0;
+    // Use actual critical issues count from Firestore (open issues with severity=critical)
+    // instead of summary data which counts all critical issues found in latest run
+    const criticalCount = issueCountsLoading ? 0 : issueCounts.critical;
     const lastRun = summary.data?.last_run;
     const baseHealth = derived.data?.base_health || 100;
 
@@ -392,7 +393,7 @@ export function DashboardContent({
         value: totalIssues.toString(),
         badge:
           totalIssues > 0
-            ? `${bySeverity.critical || 0} critical`
+            ? `${criticalCount} critical`
             : "All clear",
         context: "Duplicates, broken links, attendance",
       },
@@ -414,39 +415,13 @@ export function DashboardContent({
   // Use real trend data or empty array
   const trendData = trends.data || [];
 
-  // Calculate severity breakdown - aggregate from by_type_severity if by_severity is missing
-  const bySeverity = summary.data?.summary?.by_severity || {};
-  const byTypeSeverity = summary.data?.summary?.by_type_severity || {};
-
-  // If by_severity is empty or all zeros, calculate from by_type_severity
-  const hasSeverityData =
-    (bySeverity.critical || 0) +
-      (bySeverity.warning || 0) +
-      (bySeverity.info || 0) >
-    0;
-
-  let severityCounts = {
-    critical: bySeverity.critical || 0,
-    warning: bySeverity.warning || 0,
-    info: bySeverity.info || 0,
+  // Use actual severity counts from Firestore (open issues only)
+  // instead of summary data which counts all issues found in latest run
+  const severityCounts = {
+    critical: issueCountsLoading ? 0 : issueCounts.critical,
+    warning: issueCountsLoading ? 0 : issueCounts.warning,
+    info: issueCountsLoading ? 0 : issueCounts.info,
   };
-
-  if (!hasSeverityData && Object.keys(byTypeSeverity).length > 0) {
-    // Aggregate from by_type_severity
-    severityCounts = { critical: 0, warning: 0, info: 0 };
-    Object.entries(byTypeSeverity).forEach(([key, value]) => {
-      if (typeof value === "number" && key.includes(":")) {
-        const severity = key.split(":")[1];
-        if (severity === "critical") {
-          severityCounts.critical += value;
-        } else if (severity === "warning") {
-          severityCounts.warning += value;
-        } else if (severity === "info") {
-          severityCounts.info += value;
-        }
-      }
-    });
-  }
 
   const totalSeverity =
     severityCounts.critical + severityCounts.warning + severityCounts.info;
