@@ -35,6 +35,24 @@ export VITE_FIREBASE_STORAGE_BUCKET=$(gcloud secrets versions access latest --se
 export VITE_FIREBASE_MESSAGING_SENDER_ID=$(gcloud secrets versions access latest --secret="FIREBASE_MESSAGING_SENDER_ID" --project="$PROJECT_ID" 2>/dev/null || echo "")
 export VITE_FIREBASE_APP_ID=$(gcloud secrets versions access latest --secret="FIREBASE_APP_ID" --project="$PROJECT_ID" 2>/dev/null || echo "")
 
+# Fetch Cloud Run backend URL for API_BASE
+echo "Fetching Cloud Run backend URL..."
+REGION=${CLOUD_RUN_REGION:-us-central1}
+SERVICE_NAME="integrity-runner"
+CLOUD_RUN_URL=$(gcloud run services describe "$SERVICE_NAME" \
+  --region="$REGION" \
+  --project="$PROJECT_ID" \
+  --format="value(status.url)" 2>/dev/null || echo "")
+
+if [ -n "$CLOUD_RUN_URL" ]; then
+  export VITE_API_BASE="$CLOUD_RUN_URL"
+  echo "✅ Set VITE_API_BASE to: $CLOUD_RUN_URL"
+else
+  echo "⚠️  Warning: Could not fetch Cloud Run URL. VITE_API_BASE will not be set."
+  echo "   Frontend will fall back to window.location.origin (may cause API errors)"
+fi
+echo ""
+
 # Check if any secrets are missing
 MISSING_SECRETS=()
 [ -z "$VITE_FIREBASE_API_KEY" ] && MISSING_SECRETS+=("FIREBASE_API_KEY")

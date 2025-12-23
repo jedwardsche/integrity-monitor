@@ -20,6 +20,8 @@ from tenacity import (
 # Constants
 MIN_REQUEST_INTERVAL = float(os.getenv("AIRTABLE_MIN_REQUEST_INTERVAL", "0.2"))  # Seconds between requests
 API_TIMEOUT_SECONDS = int(os.getenv("AIRTABLE_API_TIMEOUT_SECONDS", "30"))  # Timeout for retries
+# Socket-level timeout for large record fetches (~10k records per entity)
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIRTABLE_REQUEST_TIMEOUT_SECONDS", "300"))  # 5 minutes default
 
 try:
     from pyairtable import Api
@@ -62,7 +64,12 @@ class AirtableClient:
             
             # Use PAT if available, otherwise use API_KEY
             token = pat or api_key
-            self._api = Api(token)
+
+            # Configure socket timeout: (connect_timeout, read_timeout)
+            # Both set to REQUEST_TIMEOUT_SECONDS to prevent hanging on network issues
+            timeout = (REQUEST_TIMEOUT_SECONDS, REQUEST_TIMEOUT_SECONDS)
+            self._api = Api(token, timeout=timeout)
+            logger.info(f"Initialized Airtable API with {REQUEST_TIMEOUT_SECONDS}s socket timeout")
         return self._api
 
     def _resolve_table(self, key: str) -> Dict[str, str]:
@@ -70,26 +77,8 @@ class AirtableClient:
         table_cfg = self._config.table(key)
         base_id = os.getenv(table_cfg.base_env)
         table_id = os.getenv(table_cfg.table_env)
-        
-        # #region agent log
-        import json as _json
-        import time as _time
-        debug_log_path = '/Users/joshuaedwards/Library/CloudStorage/GoogleDrive-jedwards@che.school/My Drive/CHE/che-data-integrity-monitor/.cursor/debug.log'
-        try:
-            with open(debug_log_path, 'a') as f:
-                f.write(_json.dumps({"sessionId":"debug-session","runId":"scan","hypothesisId":"E","location":"airtable.py:65","message":"_resolve_table called","data":{"key":key,"base_var":table_cfg.base_env,"base_id":base_id,"table_var":table_cfg.table_env,"table_id":table_id},"timestamp":int(_time.time()*1000)})+'\n')
-        except: pass
-        # #endregion agent log
 
         if not base_id:
-            # #region agent log
-            try:
-                import json as _json
-                import time as _time
-                with open(debug_log_path, 'a') as f:
-                    f.write(_json.dumps({"sessionId":"debug-session","runId":"scan","hypothesisId":"E","location":"airtable.py:75","message":"Base ID missing, raising error","data":{"key":key,"base_var":table_cfg.base_env},"timestamp":int(_time.time()*1000)})+'\n')
-            except: pass
-            # #endregion agent log
             raise ValueError(
                 f"Environment variable {table_cfg.base_env} not set (required for {key})"
             )

@@ -52,6 +52,7 @@ export function useFirestoreRuns(limitCount: number = 10) {
               status: (() => {
                 const statusLower = (data.status || "").toLowerCase();
                 if (statusLower === "error") return "Error";
+                if (statusLower === "timeout") return "Timeout";
                 if (statusLower === "critical") return "Critical";
                 if (statusLower === "warning") return "Warning";
                 if (statusLower === "running") return "Running";

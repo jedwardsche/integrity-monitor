@@ -587,3 +587,93 @@ exports.updateScheduleExecutionStatus = onSchedule(
     }
   }
 );
+
+/**
+ * Scheduled function that runs every 10 minutes to detect and clean up hung runs.
+ * Marks runs that have been in "running" status for more than 30 minutes as "timeout".
+ */
+exports.cleanupHungRuns = onSchedule(
+  {
+    schedule: "every 10 minutes",
+    timeZone: "UTC",
+    memory: "128MiB",
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const HUNG_RUN_THRESHOLD_MINUTES = 30;
+    const now = Timestamp.now();
+    const cutoffTime = Timestamp.fromDate(
+      new Date(Date.now() - HUNG_RUN_THRESHOLD_MINUTES * 60 * 1000)
+    );
+
+    logger.info("Checking for hung runs", {
+      timestamp: now.toDate().toISOString(),
+      cutoffTime: cutoffTime.toDate().toISOString(),
+      thresholdMinutes: HUNG_RUN_THRESHOLD_MINUTES,
+    });
+
+    try {
+      // Find runs that have been "running" for more than the threshold
+      const runsRef = db.collection("integrity_runs");
+      const hungRunsQuery = runsRef
+        .where("status", "==", "running")
+        .where("started_at", "<", cutoffTime)
+        .limit(50);
+
+      const hungRunsSnapshot = await hungRunsQuery.get();
+
+      if (hungRunsSnapshot.empty) {
+        logger.info("No hung runs found");
+        return;
+      }
+
+      logger.info(`Found ${hungRunsSnapshot.size} hung run(s) to clean up`);
+
+      // Update each hung run to "timeout" status
+      const batch = db.batch();
+      const updates = [];
+
+      for (const runDoc of hungRunsSnapshot.docs) {
+        const runData = runDoc.data();
+        const runId = runDoc.id;
+        const startedAt = runData.started_at?.toDate();
+        const elapsedMinutes = startedAt
+          ? Math.floor((Date.now() - startedAt.getTime()) / (1000 * 60))
+          : null;
+
+        const updateData = {
+          status: "timeout",
+          ended_at: now,
+          error_message: `Run exceeded maximum duration (${HUNG_RUN_THRESHOLD_MINUTES} minutes) and was automatically terminated`,
+        };
+
+        batch.update(runDoc.ref, updateData);
+
+        updates.push({
+          runId,
+          trigger: runData.trigger,
+          elapsedMinutes,
+          startedAt: startedAt?.toISOString(),
+        });
+
+        logger.info(`Marking hung run as timeout`, {
+          runId,
+          elapsedMinutes,
+          trigger: runData.trigger,
+        });
+      }
+
+      // Commit the batch update
+      await batch.commit();
+
+      logger.info(`Successfully cleaned up ${updates.length} hung run(s)`, {
+        updates,
+      });
+    } catch (error) {
+      logger.error("Error cleaning up hung runs", {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  }
+);

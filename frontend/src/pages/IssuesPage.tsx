@@ -81,7 +81,7 @@ export function IssuesPage() {
         <div className="flex gap-3">
           <button
             onClick={() => navigate("/rules")}
-            className="px-4 py-2 bg-[var(--cta-blue)] text-white rounded-lg hover:bg-blue-600 transition-colors"
+            className="px-4 py-2 border border-[var(--cta-blue)] bg-white text-[var(--cta-blue)] rounded-lg hover:bg-[var(--cta-blue)]/5 transition-colors"
           >
             View Rules
           </button>

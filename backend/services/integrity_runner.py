@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -28,6 +30,10 @@ from ..services.config_updater import update_config
 from ..services.status_calculator import calculate_result_status
 
 logger = get_logger(__name__)
+
+# Maximum duration for an integrity run (seconds)
+# Runs exceeding this duration will be terminated and marked as "timeout"
+MAX_RUN_DURATION_SECONDS = int(os.getenv("MAX_RUN_DURATION_SECONDS", "1800"))  # 30 minutes default
 
 
 class IntegrityRunner:
@@ -143,9 +149,39 @@ class IntegrityRunner:
         
         # Initialize summary to empty dict so it's always available in finally block
         summary: Dict[str, Any] = {}
-        
-        # Helper to check cancellation
+
+        # Setup timeout mechanism
+        timeout_triggered = threading.Event()
+        timeout_timer = None
+
+        def handle_timeout():
+            """Called when run exceeds maximum duration."""
+            timeout_triggered.set()
+            logger.error(
+                "Run exceeded maximum duration",
+                extra={"run_id": run_id, "max_duration_seconds": MAX_RUN_DURATION_SECONDS}
+            )
+            try:
+                self._firestore_writer.write_log(
+                    run_id,
+                    "error",
+                    f"Run exceeded maximum duration ({MAX_RUN_DURATION_SECONDS}s) and will be terminated"
+                )
+            except Exception:
+                pass
+
+        # Start timeout timer
+        timeout_timer = threading.Timer(MAX_RUN_DURATION_SECONDS, handle_timeout)
+        timeout_timer.daemon = True
+        timeout_timer.start()
+        logger.info(f"Run timeout set to {MAX_RUN_DURATION_SECONDS}s", extra={"run_id": run_id})
+
+        # Helper to check cancellation and timeout
         def check_cancelled():
+            # Check timeout first
+            if timeout_triggered.is_set():
+                raise TimeoutError(f"Run exceeded maximum duration of {MAX_RUN_DURATION_SECONDS} seconds")
+            # Then check cancellation
             if cancel_event and cancel_event.is_set():
                 status = "cancelled"
                 error_message = "Scan cancelled by user"
@@ -631,6 +667,31 @@ class IntegrityRunner:
                 # This is critical - log but don't fail the run
                 error_message = (error_message or "") + f" Firestore write failed: {str(exc)}"
 
+        except TimeoutError as exc:
+            status = "timeout"
+            error_message = str(exc)
+            logger.error(
+                "Integrity run exceeded maximum duration",
+                extra={"run_id": run_id, "max_duration_seconds": MAX_RUN_DURATION_SECONDS},
+                exc_info=True,
+            )
+            try:
+                self._firestore_writer.write_log(run_id, "error", f"Run timed out: {error_message}")
+            except Exception:
+                pass
+            # Write timeout status to Firestore
+            try:
+                run_metadata = {
+                    "status": status,
+                    "started_at": start_time,
+                    "ended_at": datetime.now(timezone.utc),
+                    "error_message": error_message,
+                    **metrics,
+                }
+                self._firestore_writer.write_run(run_id, {}, run_metadata)
+            except Exception:
+                logger.error("Failed to write timeout status to Firestore", extra={"run_id": run_id})
+
         except IntegrityRunError as exc:
             status = "error"
             error_message = str(exc)
@@ -679,9 +740,14 @@ class IntegrityRunner:
 
         finally:
             import time as _time_module
+
+            # Cancel timeout timer if it's still running
+            if timeout_timer is not None:
+                timeout_timer.cancel()
+
             elapsed_ms = int((_time_module.time() - start) * 1000)
             end_time = datetime.now(timezone.utc)
-            
+
             # Clear run_id reference
             if hasattr(self, '_current_run_id'):
                 delattr(self, '_current_run_id')
@@ -801,7 +867,7 @@ class IntegrityRunner:
 
     def _execute_checks(self, records: Dict[str, List[dict]]) -> List[IssuePayload]:
         results: List[IssuePayload] = []
-        results.extend(duplicates.run(records))
+        results.extend(duplicates.run(records, self._schema_config))
         results.extend(links.run(records, self._schema_config))
         results.extend(required_fields.run(records, self._schema_config))
         results.extend(attendance.run(records, self._runtime_config.attendance_rules))

@@ -12,16 +12,91 @@ async function fetchJson<T>(path: string, token?: string): Promise<T> {
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
+  // #region agent log
+  fetch("http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: "SchemaPage.tsx:15",
+      message: "fetchJson called",
+      data: { url, path, apiBase: API_BASE, hasToken: !!token },
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "schema-fetch",
+      hypothesisId: "H7",
+    }),
+  }).catch(() => {});
+  // #endregion agent log
   const response = await fetch(url, { cache: "no-store", headers });
   const contentType = response.headers.get("content-type") || "";
+  // #region agent log
+  fetch("http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: "SchemaPage.tsx:18",
+      message: "Response received",
+      data: {
+        url,
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        contentType,
+        isJson: contentType.includes("application/json"),
+      },
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "schema-fetch",
+      hypothesisId: "H8",
+    }),
+  }).catch(() => {});
+  // #endregion agent log
   if (!response.ok || !contentType.includes("application/json")) {
     const message = await response.text();
-    throw new Error(
+    // #region agent log
+    fetch("http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "SchemaPage.tsx:21",
+        message: "Response is not JSON",
+        data: {
+          url,
+          status: response.status,
+          contentType,
+          messagePreview: message.substring(0, 200),
+          isHtml: message.trim().startsWith("<"),
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "schema-fetch",
+        hypothesisId: "H8",
+      }),
+    }).catch(() => {});
+    // #endregion agent log
+    const errorMessage =
       message && message.trim().startsWith("<")
-        ? `Expected JSON but received HTML from ${url}. Is the backend running at VITE_API_BASE?`
-        : message || `Request failed (${response.status}) for ${url}`
-    );
+        ? `Expected JSON but received HTML from ${url}. This usually means:\n1. VITE_API_BASE is not set correctly in production (should point to Cloud Run backend URL)\n2. The backend is not running or not accessible\n3. Firebase Hosting is serving the SPA instead of proxying to the backend\n\nCurrent API_BASE: ${API_BASE}\nVITE_API_BASE env: ${
+            import.meta.env.VITE_API_BASE || "not set"
+          }`
+        : message || `Request failed (${response.status}) for ${url}`;
+    throw new Error(errorMessage);
   }
+  // #region agent log
+  fetch("http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: "SchemaPage.tsx:27",
+      message: "Parsing JSON response",
+      data: { url, contentType },
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "schema-fetch",
+      hypothesisId: "H8",
+    }),
+  }).catch(() => {});
+  // #endregion agent log
   return (await response.json()) as T;
 }
 
@@ -55,11 +130,68 @@ export function SchemaPage() {
 
     const loadSummary = async () => {
       try {
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "SchemaPage.tsx:58",
+              message: "Loading summary",
+              data: { apiBase: API_BASE, user: !!user },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "schema-summary",
+              hypothesisId: "H7",
+            }),
+          }
+        ).catch(() => {});
+        // #endregion agent log
         const data = await fetchJson<AirtableSummary>(
           "/airtable/schema/summary"
         );
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "SchemaPage.tsx:62",
+              message: "Summary loaded successfully",
+              data: { hasData: !!data },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "schema-summary",
+              hypothesisId: "H7",
+            }),
+          }
+        ).catch(() => {});
+        // #endregion agent log
         setSummary(data);
       } catch (error) {
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "SchemaPage.tsx:66",
+              message: "Summary load failed",
+              data: {
+                error: error instanceof Error ? error.message : String(error),
+                hasSchema: !!schema,
+              },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              runId: "schema-summary",
+              hypothesisId: "H7",
+            }),
+          }
+        ).catch(() => {});
+        // #endregion agent log
         setSummaryError(error instanceof Error ? error.message : String(error));
         // If schema is already present, derive a local summary as a fallback.
         if (schema) {

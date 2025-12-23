@@ -427,7 +427,7 @@ export default function App({ children }: AppProps) {
                       }`
                     }
                   >
-                    Airtable Schema
+                    Schema
                   </NavLink>
                 </div>
               </nav>

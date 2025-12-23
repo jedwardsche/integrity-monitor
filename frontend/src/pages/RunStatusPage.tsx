@@ -37,6 +37,34 @@ export function RunStatusPage() {
       statusLower !== "critical"
     : false;
 
+  // Reset isCancelling when status actually changes to cancelled
+  useEffect(() => {
+    if (
+      isCancelling &&
+      (statusLower === "cancelled" || statusLower === "canceled")
+    ) {
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "RunStatusPage.tsx:39",
+            message: "Status changed to cancelled, resetting isCancelling",
+            data: { statusLower, previousIsCancelling: isCancelling },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "cancel-action",
+            hypothesisId: "H5",
+          }),
+        }
+      ).catch(() => {});
+      // #endregion agent log
+      setIsCancelling(false);
+    }
+  }, [statusLower, isCancelling]);
+
   // Handle auto-scroll for logs - only scroll if user is at bottom
   useEffect(() => {
     if (!logsContainerRef.current || !shouldAutoScrollRef.current) return;
@@ -245,6 +273,29 @@ export function RunStatusPage() {
             <button
               onClick={async () => {
                 if (!runId || isCancelling) return;
+                // #region agent log
+                fetch(
+                  "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      location: "RunStatusPage.tsx:247",
+                      message: "Cancel button clicked",
+                      data: {
+                        runId,
+                        isCancelling,
+                        currentStatus: runStatus?.status,
+                        isRunning,
+                      },
+                      timestamp: Date.now(),
+                      sessionId: "debug-session",
+                      runId: "cancel-action",
+                      hypothesisId: "H4",
+                    }),
+                  }
+                ).catch(() => {});
+                // #endregion agent log
                 setIsCancelling(true);
                 try {
                   const token = await getToken();
@@ -254,6 +305,24 @@ export function RunStatusPage() {
                     return;
                   }
 
+                  // #region agent log
+                  fetch(
+                    "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "RunStatusPage.tsx:257",
+                        message: "Sending cancel request",
+                        data: { runId, apiBase: API_BASE },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "cancel-action",
+                        hypothesisId: "H6",
+                      }),
+                    }
+                  ).catch(() => {});
+                  // #endregion agent log
                   const response = await fetch(
                     `${API_BASE}/integrity/run/${runId}/cancel`,
                     {
@@ -264,6 +333,29 @@ export function RunStatusPage() {
                       },
                     }
                   );
+
+                  // #region agent log
+                  fetch(
+                    "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "RunStatusPage.tsx:268",
+                        message: "Cancel response received",
+                        data: {
+                          ok: response.ok,
+                          status: response.status,
+                          statusText: response.statusText,
+                        },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "cancel-action",
+                        hypothesisId: "H6",
+                      }),
+                    }
+                  ).catch(() => {});
+                  // #endregion agent log
 
                   if (!response.ok) {
                     let errorData;
@@ -285,8 +377,51 @@ export function RunStatusPage() {
                     throw new Error(errorMessage);
                   }
 
+                  // #region agent log
+                  fetch(
+                    "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "RunStatusPage.tsx:288",
+                        message:
+                          "Cancel request succeeded, waiting for status update",
+                        data: { runId, currentStatus: runStatus?.status },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "cancel-action",
+                        hypothesisId: "H5",
+                      }),
+                    }
+                  ).catch(() => {});
+                  // #endregion agent log
                   // Status will update via real-time subscription
+                  // Keep isCancelling true until status actually changes
                 } catch (error) {
+                  // #region agent log
+                  fetch(
+                    "http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        location: "RunStatusPage.tsx:293",
+                        message: "Cancel request failed",
+                        data: {
+                          error:
+                            error instanceof Error
+                              ? error.message
+                              : String(error),
+                        },
+                        timestamp: Date.now(),
+                        sessionId: "debug-session",
+                        runId: "cancel-action",
+                        hypothesisId: "H6",
+                      }),
+                    }
+                  ).catch(() => {});
+                  // #endregion agent log
                   console.error("Failed to cancel run:", error);
                   let errorMessage = "Failed to cancel run. Please try again.";
 
@@ -301,7 +436,6 @@ export function RunStatusPage() {
                   }
 
                   alert(errorMessage);
-                } finally {
                   setIsCancelling(false);
                 }
               }}

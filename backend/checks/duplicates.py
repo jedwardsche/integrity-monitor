@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from itertools import combinations
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
+from ..config.models import DuplicateDefinition, DuplicateRule, SchemaConfig
 from ..utils.issues import IssuePayload
 from ..utils.normalization import normalize_name, normalize_phone
 from ..utils.similarity import jaccard_ratio, jaro_winkler
+from .duplicate_conditions import evaluate_condition
 
 LIKELY_THRESHOLD = 0.8
 POSSIBLE_THRESHOLD = 0.6
@@ -77,11 +79,20 @@ class PairMatch:
     evidence: Dict[str, Any]
 
 
-def run(records: Dict[str, list]) -> List[IssuePayload]:
+def run(records: Dict[str, list], schema_config: Optional[SchemaConfig] = None) -> List[IssuePayload]:
+    """Run duplicate detection checks.
+    
+    Args:
+        records: Dictionary mapping entity names to lists of raw records
+        schema_config: Optional SchemaConfig with duplicate rules. If None, uses hardcoded logic.
+    """
     issues: List[IssuePayload] = []
-    issues.extend(_process_students(records.get("students", [])))
-    issues.extend(_process_parents(records.get("parents", [])))
-    issues.extend(_process_contractors(records.get("contractors", [])))
+    
+    dup_config = schema_config.duplicates if schema_config else {}
+    
+    issues.extend(_process_students(records.get("students", []), dup_config.get("students")))
+    issues.extend(_process_parents(records.get("parents", []), dup_config.get("parents")))
+    issues.extend(_process_contractors(records.get("contractors", []), dup_config.get("contractors")))
     return issues
 
 
@@ -284,27 +295,26 @@ def _normalize_contractors(records: Iterable[dict]) -> Dict[str, ContractorRecor
 # ---------------------------------------------------------------------------
 
 
-def _process_students(raw_records: List[dict]) -> List[IssuePayload]:
+def _process_students(raw_records: List[dict], dup_def: Optional[DuplicateDefinition] = None) -> List[IssuePayload]:
     normalized = _normalize_students(raw_records)
-    pairs = _detect_pairs(normalized, _classify_student_pair)
+    classifier = lambda a, b: _classify_pair(a, b, "student", dup_def) if dup_def else _classify_student_pair(a, b)
+    pairs = _detect_pairs(normalized, classifier)
     return _build_group_issues("student", normalized, pairs)
 
 
-def _process_parents(raw_records: List[dict]) -> List[IssuePayload]:
+def _process_parents(raw_records: List[dict], dup_def: Optional[DuplicateDefinition] = None) -> List[IssuePayload]:
     normalized = _normalize_parents(raw_records)
-    pairs = _detect_pairs(normalized, _classify_parent_pair)
+    classifier = lambda a, b: _classify_pair(a, b, "parent", dup_def) if dup_def else _classify_parent_pair(a, b)
+    pairs = _detect_pairs(normalized, classifier)
     return _build_group_issues("parent", normalized, pairs)
 
 
-def _process_contractors(raw_records: List[dict]) -> List[IssuePayload]:
+def _process_contractors(raw_records: List[dict], dup_def: Optional[DuplicateDefinition] = None) -> List[IssuePayload]:
     normalized = _normalize_contractors(raw_records)
-    pairs = _detect_pairs(normalized, _classify_contractor_pair)
+    classifier = lambda a, b: _classify_pair(a, b, "contractor", dup_def) if dup_def else _classify_contractor_pair(a, b)
+    pairs = _detect_pairs(normalized, classifier)
     return _build_group_issues("contractor", normalized, pairs)
 
-
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
-
-# ... (omitting lines between imports and function to keep context clear)
 
 def _detect_pairs(
     normalized: Dict[str, Any],
@@ -371,7 +381,98 @@ def _compute_blocks(record: Any) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Classification logic
+# Rule-based classification logic
+# ---------------------------------------------------------------------------
+
+
+def _evaluate_rule(
+    rule: DuplicateRule,
+    record_a: Any,
+    record_b: Any,
+    entity: str,
+    match_type: str,
+) -> Optional[PairMatch]:
+    """Evaluate a duplicate rule against two records.
+    
+    Args:
+        rule: DuplicateRule to evaluate
+        record_a: First normalized record
+        record_b: Second normalized record
+        entity: Entity type ("student", "parent", "contractor")
+        match_type: "likely" or "possible"
+        
+    Returns:
+        PairMatch if all conditions match, None otherwise
+    """
+    all_evidence: Dict[str, Any] = {}
+    all_conditions_match = True
+    
+    for condition in rule.conditions:
+        matches, evidence = evaluate_condition(condition, record_a, record_b, entity)
+        all_evidence.update(evidence)
+        
+        if not matches:
+            all_conditions_match = False
+            break
+    
+    if not all_conditions_match:
+        return None
+    
+    # Calculate confidence based on match type and evidence
+    confidence = 0.95 if match_type == "likely" else 0.7
+    
+    # Adjust confidence based on evidence quality
+    if "similarity" in str(all_evidence):
+        for key, value in all_evidence.items():
+            if isinstance(value, dict) and "similarity" in value:
+                confidence = max(confidence, value.get("similarity", 0.7))
+    
+    return PairMatch(
+        entity=entity,
+        primary_id=record_a.record_id,
+        secondary_id=record_b.record_id,
+        rule_id=rule.rule_id,
+        match_type=match_type,
+        severity=rule.severity or (LIKELY_SEVERITY if match_type == "likely" else POSSIBLE_SEVERITY),
+        confidence=round(confidence, 3),
+        evidence=all_evidence,
+    )
+
+
+def _classify_pair(
+    record_a: Any,
+    record_b: Any,
+    entity: str,
+    dup_def: DuplicateDefinition,
+) -> Optional[PairMatch]:
+    """Generic rule-based classifier for duplicate pairs.
+    
+    Args:
+        record_a: First normalized record
+        record_b: Second normalized record
+        entity: Entity type ("student", "parent", "contractor")
+        dup_def: DuplicateDefinition with likely/possible rules
+        
+    Returns:
+        PairMatch if any rule matches, None otherwise
+    """
+    # Try likely rules first
+    for rule in dup_def.likely:
+        match = _evaluate_rule(rule, record_a, record_b, entity, "likely")
+        if match:
+            return match
+    
+    # Then try possible rules
+    for rule in dup_def.possible:
+        match = _evaluate_rule(rule, record_a, record_b, entity, "possible")
+        if match:
+            return match
+    
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Legacy hardcoded classification logic (fallback)
 # ---------------------------------------------------------------------------
 
 
