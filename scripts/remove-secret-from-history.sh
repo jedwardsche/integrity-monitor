@@ -18,8 +18,10 @@ if [ "$confirm" != "yes" ]; then
     exit 1
 fi
 
-# Get the secret value that was exposed (from the error message)
-SECRET_VALUE="REDACTED"
+# Get the secret value that was exposed (from GitHub's error message)
+echo "Enter the secret value to remove from git history:"
+echo "(You can copy it from the GitHub push protection error message)"
+read -s SECRET_VALUE
 
 echo ""
 echo "Removing secret from git history..."

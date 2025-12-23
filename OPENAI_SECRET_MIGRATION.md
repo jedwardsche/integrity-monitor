@@ -74,7 +74,7 @@ brew install git-filter-repo
 ```bash
 # Download BFG from https://rtyley.github.io/bfg-repo-cleaner/
 # Create a file with the secret value
-echo "REDACTED" > secrets.txt
+echo "YOUR_SECRET_VALUE_HERE" > secrets.txt
 
 # Run BFG
 java -jar bfg.jar --replace-text secrets.txt
