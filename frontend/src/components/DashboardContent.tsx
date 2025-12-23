@@ -8,6 +8,7 @@ import {
   type Schedule,
 } from "../hooks/useFirestoreSchedules";
 import { IssueTrendChart } from "./IssueTrendChart";
+import { useIssueCounts } from "../hooks/useIssueCounts";
 
 type DashboardContentProps = {
   integrityMetrics: ReturnType<typeof useIntegrityMetrics>;
@@ -279,6 +280,9 @@ export function DashboardContent({
   const { count: newIssuesCount, loading: newIssuesLoading } =
     useNewIssuesFromRecentRuns(3);
 
+  // Fetch actual open issues count from Firestore
+  const { counts: issueCounts, loading: issueCountsLoading } = useIssueCounts();
+
   // Filter and format enabled schedules for display
   const displaySchedules = useMemo(() => {
     if (!schedules) return [];
@@ -329,7 +333,10 @@ export function DashboardContent({
 
   // Calculate summary cards from real data
   const summaryCards = useMemo(() => {
-    const totalIssues = summary.data?.summary?.total || 0;
+    // Use actual open issues count from Firestore instead of summary total
+    // Summary total counts all issues found in latest run (including duplicates that get merged)
+    // Firestore count shows actual unique open issues
+    const totalIssues = issueCountsLoading ? 0 : issueCounts.open;
     const bySeverity = summary.data?.summary?.by_severity || {};
     const criticalCount =
       derived.data?.critical_records || bySeverity.critical || 0;
@@ -396,7 +403,7 @@ export function DashboardContent({
         context: "Attendance + billing gaps",
       },
     ];
-  }, [summary, derived, newIssuesCount, newIssuesLoading]);
+  }, [summary, derived, newIssuesCount, newIssuesLoading, issueCounts, issueCountsLoading]);
 
   // Use real issue queues or empty array
   const issueQueues = queues.data || [];

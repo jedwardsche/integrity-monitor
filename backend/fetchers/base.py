@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from ..clients.airtable import AirtableClient
 
@@ -12,10 +12,16 @@ class BaseFetcher:
         self._client = client
         self._entity_key = entity_key
 
-    def fetch(self) -> List[Dict[str, Any]]:
+    def fetch(
+        self,
+        progress_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None,
+    ) -> List[Dict[str, Any]]:
         """Fetch all records for the entity.
+        
+        Args:
+            progress_callback: Optional callback function(message, metadata) called during pagination
         
         Returns:
             List of record dictionaries.
         """
-        return self._client.fetch_records(self._entity_key)
+        return self._client.fetch_records(self._entity_key, progress_callback)

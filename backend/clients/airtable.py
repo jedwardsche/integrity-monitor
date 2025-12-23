@@ -7,7 +7,7 @@ import os
 import time
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from tenacity import (
     retry,
@@ -22,6 +22,8 @@ MIN_REQUEST_INTERVAL = float(os.getenv("AIRTABLE_MIN_REQUEST_INTERVAL", "0.2")) 
 API_TIMEOUT_SECONDS = int(os.getenv("AIRTABLE_API_TIMEOUT_SECONDS", "30"))  # Timeout for retries
 # Socket-level timeout for large record fetches (~10k records per entity)
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIRTABLE_REQUEST_TIMEOUT_SECONDS", "300"))  # 5 minutes default
+# Progress logging interval (log every N pages or every 500 records)
+PROGRESS_LOG_INTERVAL = int(os.getenv("AIRTABLE_PROGRESS_LOG_INTERVAL", "5"))  # Log every 5 pages
 
 try:
     from pyairtable import Api
@@ -53,17 +55,15 @@ class AirtableClient:
                 raise ImportError(
                     "pyairtable not installed. Install with: pip install pyairtable"
                 )
-            # Try PAT first (personal access token), fall back to API_KEY for backwards compatibility
+            # Use Personal Access Token (PAT) for Airtable authentication
             pat = os.getenv("AIRTABLE_PAT")
-            api_key = os.getenv("AIRTABLE_API_KEY")
             
-            if not pat and not api_key:
+            if not pat:
                 raise ValueError(
-                    "AIRTABLE_PAT or AIRTABLE_API_KEY environment variable must be set"
+                    "AIRTABLE_PAT environment variable must be set"
                 )
             
-            # Use PAT if available, otherwise use API_KEY
-            token = pat or api_key
+            token = pat
 
             # Configure socket timeout: (connect_timeout, read_timeout)
             # Both set to REQUEST_TIMEOUT_SECONDS to prevent hanging on network issues
@@ -115,8 +115,16 @@ class AirtableClient:
         key: str,
         base_id: str,
         table_id: str,
+        progress_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Fetch records with retry logic and rate limiting."""
+        """Fetch records with retry logic and rate limiting.
+        
+        Args:
+            key: Entity key (e.g., "students", "parents")
+            base_id: Airtable base ID
+            table_id: Airtable table ID
+            progress_callback: Optional callback function(message, metadata) called during pagination
+        """
         self._throttle_request(base_id)
 
         api = self._get_api()
@@ -131,17 +139,61 @@ class AirtableClient:
             },
         )
 
-        # Fetch all records with pagination
+        # Fetch all records with pagination, throttling between pages
         records = []
+        page_count = 0
+        total_records = 0
+        
         try:
-            all_records = table.all()
-            records = all_records
+            # Use iterate() directly so we can throttle between pages
+            for page in table.iterate(page_size=100):
+                records.extend(page)
+                total_records += len(page)
+                page_count += 1
+                
+                # Throttle between pages (first page already throttled above)
+                if page_count > 1:
+                    self._throttle_request(base_id)
+                
+                # Call progress callback if provided
+                if progress_callback:
+                    try:
+                        progress_callback(
+                            f"Fetched page {page_count}, {total_records} records so far",
+                            {"pages": page_count, "records": total_records, "entity": key}
+                        )
+                    except Exception:
+                        pass  # Don't fail on callback errors
+                
+                # Log progress periodically (for console logs)
+                if page_count % PROGRESS_LOG_INTERVAL == 0 or total_records % 500 == 0:
+                    logger.info(
+                        f"Fetched {page_count} page(s), {total_records} records so far",
+                        extra={
+                            "entity": key,
+                            "pages": page_count,
+                            "records": total_records,
+                            "base": base_id,
+                            "table": table_id,
+                        }
+                    )
+
+            # Call completion callback
+            if progress_callback:
+                try:
+                    progress_callback(
+                        f"Completed fetching {total_records} records in {page_count} pages",
+                        {"pages": page_count, "records": total_records, "entity": key}
+                    )
+                except Exception:
+                    pass
 
             logger.info(
                 "Fetched Airtable records successfully",
                 extra={
                     "entity": key,
                     "record_count": len(records),
+                    "pages": page_count,
                 },
             )
 
@@ -153,6 +205,8 @@ class AirtableClient:
                     "base": base_id,
                     "table": table_id,
                     "error": str(exc),
+                    "pages_fetched": page_count,
+                    "records_fetched": total_records,
                 },
                 exc_info=True,
             )
@@ -163,11 +217,13 @@ class AirtableClient:
     def fetch_records(
         self,
         key: str,
+        progress_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch records for the given logical entity.
 
         Args:
             key: Entity key (e.g., "students", "parents")
+            progress_callback: Optional callback function(message, metadata) called during pagination
 
         Returns:
             List of record dictionaries
@@ -177,7 +233,7 @@ class AirtableClient:
         table_id = table_meta["table_id"]
 
         try:
-            return self._fetch_with_retry(key, base_id, table_id)
+            return self._fetch_with_retry(key, base_id, table_id, progress_callback)
         except Exception as exc:
             logger.error(
                 "Failed to fetch Airtable records after retries",
@@ -190,18 +246,20 @@ class AirtableClient:
         self,
         base_id: str,
         table_id: str,
+        progress_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch records directly by base_id and table_id.
 
         Args:
             base_id: Airtable base ID
             table_id: Airtable table ID
+            progress_callback: Optional callback function(message, metadata) called during pagination
 
         Returns:
             List of record dictionaries
         """
         try:
-            return self._fetch_with_retry("direct", base_id, table_id, None)
+            return self._fetch_with_retry("direct", base_id, table_id, progress_callback)
         except Exception as exc:
             logger.error(
                 "Failed to fetch Airtable records by ID",

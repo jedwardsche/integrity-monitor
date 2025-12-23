@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
+import random
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Set
 
@@ -237,12 +241,22 @@ class FirestoreClient:
         
         return doc_id
 
-    def _check_existing_documents(self, collection_ref: Any, doc_ids: list[str]) -> Set[str]:
+    def _check_existing_documents(
+        self,
+        collection_ref: Any,
+        doc_ids: list[str],
+        progress_callback: Optional[Callable[[int, int, float], None]] = None,
+        total_issues: Optional[int] = None,
+    ) -> Set[str]:
         """Check which documents already exist in Firestore.
+        
+        Uses get_all() for small batches, or skips check for very large batches.
         
         Args:
             collection_ref: Firestore collection reference
             doc_ids: List of document IDs to check
+            progress_callback: Optional callback function(current, total, percentage) called during check
+            total_issues: Total number of issues (for progress calculation)
             
         Returns:
             Set of document IDs that already exist
@@ -250,10 +264,29 @@ class FirestoreClient:
         if not doc_ids:
             return set()
         
+        total_to_check = total_issues or len(doc_ids)
+        
+        # For very large batches (>5000), skip the existence check
+        # We'll use merge=True and determine new vs existing by checking first_seen_in_run field
+        LARGE_BATCH_THRESHOLD = 5000
+        if len(doc_ids) > LARGE_BATCH_THRESHOLD:
+            logger.info(
+                f"Skipping existence check for {len(doc_ids)} issues (using merge=True instead)",
+                extra={"total": len(doc_ids), "threshold": LARGE_BATCH_THRESHOLD}
+            )
+            if progress_callback:
+                try:
+                    # Mark check as complete immediately
+                    progress_callback(0, total_to_check, 10.0)
+                except Exception:
+                    pass
+            # Return empty set - all will be treated as potentially new
+            # We'll determine new vs existing after writing by checking first_seen_in_run
+            return set()
+        
         existing_ids: Set[str] = set()
         
-        # Firestore get_all() can handle up to 100 document references per call
-        # Split into chunks of 100
+        # For smaller batches, use get_all() in chunks of 100
         chunk_size = 100
         for i in range(0, len(doc_ids), chunk_size):
             chunk = doc_ids[i:i + chunk_size]
@@ -265,6 +298,16 @@ class FirestoreClient:
                 for doc in docs:
                     if doc.exists:
                         existing_ids.add(doc.id)
+                
+                # Call progress callback after each chunk
+                if progress_callback:
+                    checked_count = min(i + chunk_size, len(doc_ids))
+                    try:
+                        # Estimate progress: checking is ~10% of total work, writing is ~90%
+                        check_progress = (checked_count / len(doc_ids)) * 10.0 if len(doc_ids) > 0 else 0.0
+                        progress_callback(0, total_to_check, check_progress)
+                    except Exception:
+                        pass
             except Exception as exc:
                 logger.warning(
                     "Error checking existing documents",
@@ -274,6 +317,79 @@ class FirestoreClient:
                 # Continue with other chunks even if one fails
         
         return existing_ids
+
+    def _commit_batch_with_retry(
+        self,
+        batch: Any,
+        batch_count: int,
+        max_retries: int = 3,
+    ) -> None:
+        """Commit a Firestore batch with retry logic for transient errors.
+        
+        Args:
+            batch: Firestore batch object to commit
+            batch_count: Number of operations in the batch (for logging)
+            max_retries: Maximum number of retry attempts
+            
+        Raises:
+            Exception: If batch commit fails after all retries
+        """
+        last_exception = None
+        
+        for attempt in range(max_retries):
+            try:
+                batch.commit()
+                if attempt > 0:
+                    logger.info(
+                        f"Batch commit succeeded on retry attempt {attempt + 1}",
+                        extra={"batch_size": batch_count, "attempt": attempt + 1}
+                    )
+                return
+            except Exception as exc:
+                last_exception = exc
+                # Check if this is a retryable error
+                error_str = str(exc).lower()
+                is_retryable = any(keyword in error_str for keyword in [
+                    "deadline exceeded",
+                    "unavailable",
+                    "resource exhausted",
+                    "quota",
+                    "rate limit",
+                    "timeout",
+                    "connection",
+                ])
+                
+                if not is_retryable or attempt == max_retries - 1:
+                    # Not retryable or last attempt - log and re-raise
+                    logger.error(
+                        "Failed to commit batch to Firestore",
+                        extra={
+                            "error": str(exc),
+                            "batch_size": batch_count,
+                            "attempt": attempt + 1,
+                            "max_retries": max_retries,
+                            "retryable": is_retryable,
+                        },
+                        exc_info=True,
+                    )
+                    raise
+                
+                # Retryable error - wait and retry
+                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                logger.warning(
+                    f"Batch commit failed (retryable error), retrying in {wait_time}s",
+                    extra={
+                        "error": str(exc),
+                        "batch_size": batch_count,
+                        "attempt": attempt + 1,
+                        "wait_time": wait_time,
+                    },
+                )
+                time.sleep(wait_time)
+        
+        # Should never reach here, but just in case
+        if last_exception:
+            raise last_exception
 
     def record_issues(self, issues: list[Dict[str, Any]], progress_callback: Optional[Callable[[int, int, float], None]] = None) -> tuple[int, int]:
         """Write individual issues to Firestore integrity_issues collection.
@@ -301,23 +417,46 @@ class FirestoreClient:
             
             # Check which documents already exist
             all_doc_ids = [doc_id for doc_id, _ in issue_doc_pairs]
-            existing_ids = self._check_existing_documents(collection_ref, all_doc_ids)
+            total_issues = len(all_doc_ids)
             
-            # Separate new issues from existing issues
-            new_issues = [(doc_id, issue) for doc_id, issue in issue_doc_pairs if doc_id not in existing_ids]
-            existing_issues = [(doc_id, issue) for doc_id, issue in issue_doc_pairs if doc_id in existing_ids]
-            existing_count = len(existing_issues)
+            # Notify progress callback before existence check
+            if progress_callback:
+                try:
+                    progress_callback(0, total_issues, 0.0)
+                except Exception:
+                    pass
             
-            if existing_count > 0:
+            # Check which documents already exist (with progress logging)
+            existing_ids = self._check_existing_documents(collection_ref, all_doc_ids, progress_callback, total_issues)
+            
+            # If we skipped the check (large batch), treat all as potentially new
+            # We'll determine new vs existing after writing by checking first_seen_in_run
+            skipped_check = len(existing_ids) == 0 and len(all_doc_ids) > 5000
+            
+            if skipped_check:
+                # For large batches, write all issues and determine new vs existing after
+                new_issues = issue_doc_pairs  # Treat all as potentially new
+                existing_issues = []
                 logger.info(
-                    "Found existing issues that will be updated with run_id",
-                    extra={"existing": existing_count, "new": len(new_issues), "total": len(issue_doc_pairs)},
+                    f"Skipped existence check for {len(all_doc_ids)} issues - will determine new vs existing after writing",
+                    extra={"total": len(issue_doc_pairs)},
                 )
             else:
-                logger.info(
-                    "All issues are new",
-                    extra={"new": len(new_issues), "total": len(issue_doc_pairs)},
-                )
+                # Separate new issues from existing issues
+                new_issues = [(doc_id, issue) for doc_id, issue in issue_doc_pairs if doc_id not in existing_ids]
+                existing_issues = [(doc_id, issue) for doc_id, issue in issue_doc_pairs if doc_id in existing_ids]
+                existing_count = len(existing_issues)
+                
+                if existing_count > 0:
+                    logger.info(
+                        "Found existing issues that will be updated with run_id",
+                        extra={"existing": existing_count, "new": len(new_issues), "total": len(issue_doc_pairs)},
+                    )
+                else:
+                    logger.info(
+                        "All issues are new",
+                        extra={"new": len(new_issues), "total": len(issue_doc_pairs)},
+                    )
             
             if not new_issues and not existing_issues:
                 logger.info("No issues to process")
@@ -327,9 +466,9 @@ class FirestoreClient:
             batch_count = 0
             total_written = 0
             total_updated = 0
-            total_new_issues = len(new_issues)
+            total_new_issues = len(new_issues) if not skipped_check else 0  # Will calculate after writing
             
-            # Process new issues first
+            # Process new issues first (or all issues if we skipped check)
             for doc_id, issue in new_issues:
                 doc_ref = collection_ref.document(doc_id)
                 
@@ -351,11 +490,26 @@ class FirestoreClient:
                 
                 # Firestore batch limit is 500 operations
                 if batch_count >= 500:
-                    batch.commit()
+                    try:
+                        self._commit_batch_with_retry(batch, batch_count)
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to commit batch of new issues to Firestore",
+                            extra={
+                                "error": str(exc),
+                                "batch_size": batch_count,
+                                "total_written": total_written,
+                                "total_updated": total_updated,
+                            },
+                            exc_info=True,
+                        )
+                        raise
                     if progress_callback:
                         try:
                             original_total = len(issue_doc_pairs)
-                            progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
+                            # Writing is 90% of work (checking was 10%), so progress = 10% + (written/total * 90%)
+                            written_progress = (total_written / original_total * 90.0) if original_total > 0 else 0.0
+                            progress_callback(total_written + total_updated, original_total, 10.0 + written_progress)
                         except Exception:
                             pass
                     batch = client.batch()
@@ -363,11 +517,26 @@ class FirestoreClient:
             
             # Commit remaining new issues
             if batch_count > 0:
-                batch.commit()
+                try:
+                    self._commit_batch_with_retry(batch, batch_count)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to commit final batch of new issues to Firestore",
+                        extra={
+                            "error": str(exc),
+                            "batch_size": batch_count,
+                            "total_written": total_written,
+                            "total_updated": total_updated,
+                        },
+                        exc_info=True,
+                    )
+                    raise
                 if progress_callback:
                     try:
                         original_total = len(issue_doc_pairs)
-                        progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
+                        # Writing is 90% of work (checking was 10%), so progress = 10% + (written/total * 90%)
+                        written_progress = (total_written / original_total * 90.0) if original_total > 0 else 0.0
+                        progress_callback(total_written + total_updated, original_total, 10.0 + written_progress)
                     except Exception:
                         pass
                 batch = client.batch()
@@ -391,11 +560,26 @@ class FirestoreClient:
                 
                 # Firestore batch limit is 500 operations
                 if batch_count >= 500:
-                    batch.commit()
+                    try:
+                        self._commit_batch_with_retry(batch, batch_count)
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to commit batch of existing issues to Firestore",
+                            extra={
+                                "error": str(exc),
+                                "batch_size": batch_count,
+                                "total_written": total_written,
+                                "total_updated": total_updated,
+                            },
+                            exc_info=True,
+                        )
+                        raise
                     if progress_callback:
                         try:
                             original_total = len(issue_doc_pairs)
-                            progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
+                            # Writing is 90% of work (checking was 10%), so progress = 10% + (written/total * 90%)
+                            written_progress = ((total_written + total_updated) / original_total * 90.0) if original_total > 0 else 0.0
+                            progress_callback(total_written + total_updated, original_total, 10.0 + written_progress)
                         except Exception:
                             pass
                     batch = client.batch()
@@ -403,23 +587,193 @@ class FirestoreClient:
             
             # Commit remaining updates
             if batch_count > 0:
-                batch.commit()
+                try:
+                    self._commit_batch_with_retry(batch, batch_count)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to commit final batch of existing issues to Firestore",
+                        extra={
+                            "error": str(exc),
+                            "batch_size": batch_count,
+                            "total_written": total_written,
+                            "total_updated": total_updated,
+                        },
+                        exc_info=True,
+                    )
+                    raise
                 if progress_callback:
                     try:
                         original_total = len(issue_doc_pairs)
-                        progress_callback(total_written + total_updated, original_total, ((total_written + total_updated) / original_total * 100) if original_total > 0 else 0)
+                        # Writing is 90% of work (checking was 10%), so progress = 10% + (written/total * 90%)
+                        written_progress = ((total_written + total_updated) / original_total * 90.0) if original_total > 0 else 0.0
+                        progress_callback(total_written + total_updated, original_total, 10.0 + written_progress)
                     except Exception:
                         pass
                 batch = None
+            
+            # If we skipped the existence check, determine new vs existing by checking first_seen_in_run
+            if skipped_check:
+                # Get run_id from issues (all should have the same run_id)
+                run_id = None
+                for _, issue in issue_doc_pairs:
+                    if "run_id" in issue:
+                        run_id = issue["run_id"]
+                        break
+                
+                if run_id:
+                    # For large batches, use sampling instead of reading all documents
+                    LARGE_BATCH_THRESHOLD = 10000
+                    USE_SAMPLING = len(all_doc_ids) > LARGE_BATCH_THRESHOLD
+                    
+                    if USE_SAMPLING:
+                        # Use statistical sampling for large batches
+                        sample_size = min(2000, len(all_doc_ids))
+                        sample_doc_ids = random.sample(all_doc_ids, sample_size)
+                        
+                        def check_sample_documents() -> int:
+                            """Check sample documents and return count of new issues."""
+                            sample_new = 0
+                            check_chunk_size = 500
+                            
+                            for i in range(0, len(sample_doc_ids), check_chunk_size):
+                                chunk_doc_ids = sample_doc_ids[i:i + check_chunk_size]
+                                chunk_doc_refs = [collection_ref.document(doc_id) for doc_id in chunk_doc_ids]
+                                chunk_docs = client.get_all(chunk_doc_refs)
+                                
+                                for doc in chunk_docs:
+                                    if doc.exists:
+                                        doc_data = doc.to_dict()
+                                        if doc_data.get("first_seen_in_run") == run_id:
+                                            sample_new += 1
+                                
+                                # Log progress during sampling
+                                if progress_callback:
+                                    try:
+                                        checked = min(i + check_chunk_size, len(sample_doc_ids))
+                                        sample_progress = (checked / len(sample_doc_ids)) * 100.0
+                                        progress_callback(
+                                            len(all_doc_ids),
+                                            len(all_doc_ids),
+                                            95.0 + (sample_progress * 0.05)  # Last 5% of progress
+                                        )
+                                    except Exception:
+                                        pass
+                            
+                            return sample_new
+                        
+                        try:
+                            # Use timeout protection for post-write check (60 seconds)
+                            with ThreadPoolExecutor(max_workers=1) as executor:
+                                future = executor.submit(check_sample_documents)
+                                sample_new_count = future.result(timeout=60)
+                            
+                            # Extrapolate from sample
+                            new_ratio = sample_new_count / sample_size if sample_size > 0 else 0.0
+                            total_new_issues = int(new_ratio * len(all_doc_ids))
+                            
+                            # Calculate confidence interval (95% confidence)
+                            # Using normal approximation for binomial distribution
+                            p = new_ratio
+                            n = sample_size
+                            z = 1.96  # 95% confidence
+                            margin = z * math.sqrt((p * (1 - p)) / n) if n > 0 else 0
+                            lower_bound = max(0, int((p - margin) * len(all_doc_ids)))
+                            upper_bound = min(len(all_doc_ids), int((p + margin) * len(all_doc_ids)))
+                            
+                            logger.info(
+                                f"Estimated new issues from sample: {total_new_issues}/{len(all_doc_ids)} "
+                                f"(95% CI: {lower_bound}-{upper_bound}, sample: {sample_new_count}/{sample_size})",
+                                extra={
+                                    "run_id": run_id,
+                                    "method": "sampling",
+                                    "sample_size": sample_size,
+                                    "sample_new": sample_new_count,
+                                    "estimated_new": total_new_issues,
+                                    "total": len(all_doc_ids),
+                                    "confidence_interval": [lower_bound, upper_bound],
+                                }
+                            )
+                        except FuturesTimeoutError:
+                            logger.warning(
+                                "Post-write check timed out after 60 seconds, using estimate",
+                                extra={"run_id": run_id, "total_issues": len(all_doc_ids)},
+                            )
+                            total_new_issues = int(len(all_doc_ids) * 0.8)  # Conservative estimate: 80% new
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to count new issues after writing, using estimate",
+                                extra={"error": str(exc), "run_id": run_id, "total_issues": len(all_doc_ids)},
+                            )
+                            total_new_issues = int(len(all_doc_ids) * 0.8)  # Conservative estimate: 80% new
+                    else:
+                        # For smaller batches, read all documents
+                        def check_all_documents() -> int:
+                            """Check all documents and return count of new issues."""
+                            total_new = 0
+                            check_chunk_size = 500
+                            
+                            for i in range(0, len(all_doc_ids), check_chunk_size):
+                                chunk_doc_ids = all_doc_ids[i:i + check_chunk_size]
+                                chunk_doc_refs = [collection_ref.document(doc_id) for doc_id in chunk_doc_ids]
+                                chunk_docs = client.get_all(chunk_doc_refs)
+                                
+                                for doc in chunk_docs:
+                                    if doc.exists:
+                                        doc_data = doc.to_dict()
+                                        if doc_data.get("first_seen_in_run") == run_id:
+                                            total_new += 1
+                                
+                                # Log progress during check
+                                if progress_callback:
+                                    try:
+                                        checked = min(i + check_chunk_size, len(all_doc_ids))
+                                        check_progress = (checked / len(all_doc_ids)) * 100.0
+                                        progress_callback(
+                                            len(all_doc_ids),
+                                            len(all_doc_ids),
+                                            95.0 + (check_progress * 0.05)  # Last 5% of progress
+                                        )
+                                    except Exception:
+                                        pass
+                            
+                            return total_new
+                        
+                        try:
+                            # Use timeout protection (60 seconds)
+                            with ThreadPoolExecutor(max_workers=1) as executor:
+                                future = executor.submit(check_all_documents)
+                                total_new_issues = future.result(timeout=60)
+                            
+                            logger.info(
+                                f"Counted new issues after writing: {total_new_issues}/{len(all_doc_ids)}",
+                                extra={"run_id": run_id, "method": "full_check"}
+                            )
+                        except FuturesTimeoutError:
+                            logger.warning(
+                                "Post-write check timed out after 60 seconds, using estimate",
+                                extra={"run_id": run_id, "total_issues": len(all_doc_ids)},
+                            )
+                            total_new_issues = int(len(all_doc_ids) * 0.8)  # Conservative estimate: 80% new
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to count new issues after writing, using estimate",
+                                extra={"error": str(exc), "run_id": run_id, "total_issues": len(all_doc_ids)},
+                            )
+                            total_new_issues = int(len(all_doc_ids) * 0.8)  # Conservative estimate: 80% new
+                else:
+                    # No run_id, can't determine - estimate
+                    total_new_issues = int(len(all_doc_ids) * 0.8)
+                    logger.warning("No run_id in issues, cannot accurately count new vs existing")
             
             logger.info(
                 "Recorded issues to Firestore",
                 extra={
                     "collection": self._config.issues_collection,
                     "new_issues": total_new_issues,
-                    "updated_existing": total_updated,
+                    "updated_existing": total_updated if not skipped_check else (len(issue_doc_pairs) - total_new_issues),
                     "total_processed": len(issue_doc_pairs),
                     "new_written": total_written,
+                    "skipped_check": skipped_check,
                 },
             )
             

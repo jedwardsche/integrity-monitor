@@ -25,12 +25,8 @@ logger = logging.getLogger(__name__)
 class RulesService:
     """Service for managing integrity rules from new rules/ collection."""
 
-    def __init__(self, firestore_client=None):
-        """Initialize rules service with direct Firestore client.
-
-        Args:
-            firestore_client: Optional FirestoreClient instance (not used, for backward compatibility)
-        """
+    def __init__(self):
+        """Initialize rules service with direct Firestore client."""
         try:
             self.db = firestore.Client()
         except Exception as exc:
@@ -391,8 +387,11 @@ class RulesService:
         if not doc.exists:
             raise ValueError(f"Rule {rule_id} not found in {collection_path}")
 
-        # Allow deletion of all rules (YAML-sourced rules can now be deleted from Firestore)
-        # Note: This doesn't affect the YAML source files, only the Firestore copy
+        # Check if it's a YAML-sourced rule
+        rule_data = doc.to_dict()
+        if rule_data.get("source") == "yaml":
+            raise ValueError(f"Cannot delete YAML-sourced rule {rule_id}. Use sync to manage YAML rules.")
+
         doc_ref.delete()
         logger.info(f"Deleted rule {rule_id} from {collection_path}")
 

@@ -70,9 +70,7 @@ def mock_runtime_config():
 @patch("backend.services.integrity_runner.FirestoreClient")
 @patch("backend.services.integrity_runner.load_runtime_config")
 @patch("backend.services.integrity_runner.load_schema_config")
-@patch("backend.services.integrity_runner.airtable_writer.upsert")
 def test_integrity_runner_full_flow(
-    mock_upsert,
     mock_load_schema,
     mock_load_runtime,
     mock_firestore_class,

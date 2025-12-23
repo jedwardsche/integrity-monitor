@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..analyzers import scorer
 from ..checks import attendance, duplicates, links, required_fields
@@ -18,11 +18,11 @@ from ..clients.logging import get_logger, log_check, log_config_load, log_fetch,
 from ..config.config_loader import load_runtime_config
 from ..config.schema_loader import load_schema_config
 from ..config.settings import RuntimeConfig
+from ..config.models import SchemaConfig
 from ..utils.errors import CheckFailureError, FetchError, IntegrityRunError, WriteError
 from ..utils.issues import IssuePayload
 from ..fetchers.registry import build_fetchers
 from ..utils.timing import timed
-from ..writers import airtable_writer
 from ..writers.firestore_writer import FirestoreWriter
 from ..services.feedback_analyzer import get_feedback_analyzer
 from ..services.table_id_discovery import discover_table_ids
@@ -123,7 +123,14 @@ class IntegrityRunner:
         except: pass
         # #endregion agent log
 
-    def run(self, run_id: str | None = None, trigger: str = "manual", cancel_event=None, entities: List[str] | None = None) -> Dict[str, Any]:
+    def run(
+        self,
+        run_id: str | None = None,
+        trigger: str = "manual",
+        cancel_event=None,
+        entities: List[str] | None = None,
+        run_config: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
         # Explicitly reference module-level time to avoid UnboundLocalError
         # (Python may treat time as local if used in nested scopes)
         import time as _time_module
@@ -145,7 +152,14 @@ class IntegrityRunner:
         self._current_run_id = run_id
         
         # Store selected entities for use in _fetch_records
-        self._selected_entities = entities
+        # Prefer entities from run_config if provided
+        if run_config and run_config.get("entities"):
+            self._selected_entities = run_config["entities"]
+        else:
+            self._selected_entities = entities
+        
+        # Store run_config for use in filtering
+        self._run_config = run_config
         
         # Initialize summary to empty dict so it's always available in finally block
         summary: Dict[str, Any] = {}
@@ -452,16 +466,31 @@ class IntegrityRunner:
             # Execute checks
             issues: List[IssuePayload] = []
             try:
-                self._firestore_writer.write_log(run_id, "info", "Running integrity checks...")
+                # Log entity counts before starting checks
+                total_records_count = sum(len(recs) for recs in records.values())
+                entity_list = ", ".join(f"{k} ({len(v)})" for k, v in records.items())
+                self._firestore_writer.write_log(
+                    run_id, "info",
+                    f"Running integrity checks on {total_records_count} records across {len(records)} entities: {entity_list}"
+                )
+                
                 with timed("checks", metrics):
                     # Run each check individually with logging
                     check_results: List[IssuePayload] = []
+                    
+                    # Get filtered schema config if run_config has rule selection
+                    schema_config_to_use = self._schema_config
+                    if hasattr(self, "_run_config") and self._run_config:
+                        schema_config_to_use = self._filter_rules_by_selection(
+                            self._schema_config,
+                            self._run_config
+                        )
                     
                     # Duplicates check
                     import time as _time_module
                     self._firestore_writer.write_log(run_id, "info", "Running duplicates check...")
                     check_start = _time_module.time()
-                    dup_issues = duplicates.run(records)
+                    dup_issues = duplicates.run(records, schema_config_to_use)
                     check_results.extend(dup_issues)
                     dup_summary = scorer.summarize(dup_issues)
                     dup_duration = int((_time_module.time() - check_start) * 1000)
@@ -480,7 +509,7 @@ class IntegrityRunner:
                     import time as _time_module
                     self._firestore_writer.write_log(run_id, "info", "Running links check...")
                     check_start = _time_module.time()
-                    link_issues = links.run(records, self._schema_config)
+                    link_issues = links.run(records, schema_config_to_use)
                     check_results.extend(link_issues)
                     link_summary = scorer.summarize(link_issues)
                     link_duration = int((_time_module.time() - check_start) * 1000)
@@ -499,7 +528,7 @@ class IntegrityRunner:
                     import time as _time_module
                     self._firestore_writer.write_log(run_id, "info", "Running required fields check...")
                     check_start = _time_module.time()
-                    req_issues = required_fields.run(records, self._schema_config)
+                    req_issues = required_fields.run(records, schema_config_to_use)
                     check_results.extend(req_issues)
                     req_summary = scorer.summarize(req_issues)
                     req_duration = int((_time_module.time() - check_start) * 1000)
@@ -515,26 +544,47 @@ class IntegrityRunner:
                     check_cancelled()
                     
                     # Attendance check
-                    import time as _time_module
-                    self._firestore_writer.write_log(run_id, "info", "Running attendance check...")
-                    check_start = _time_module.time()
-                    att_issues = attendance.run(records, self._runtime_config.attendance_rules)
-                    check_results.extend(att_issues)
-                    att_summary = scorer.summarize(att_issues)
-                    att_duration = int((_time_module.time() - check_start) * 1000)
-                    log_check(
-                        logger,
-                        run_id,
-                        "attendance",
-                        len(att_issues),
-                        att_duration,
-                        {k: v for k, v in att_summary.items() if "attendance" in k},
-                    )
-                    self._firestore_writer.write_log(run_id, "info", f"Attendance check: {len(att_issues)} issues found in {(att_duration/1000):.1f}s")
+                    attendance_rules_to_use = self._runtime_config.attendance_rules
+                    if (hasattr(self, "_run_config") and self._run_config and
+                        self._run_config.get("rules") and
+                        "attendance_rules" in self._run_config["rules"]):
+                        # If attendance_rules is False in selection, skip attendance check
+                        if self._run_config["rules"]["attendance_rules"] is False:
+                            attendance_rules_to_use = None
                     
+                    import time as _time_module
+                    if attendance_rules_to_use:
+                        self._firestore_writer.write_log(run_id, "info", "Running attendance check...")
+                        check_start = _time_module.time()
+                        att_issues = attendance.run(records, attendance_rules_to_use)
+                        check_results.extend(att_issues)
+                        att_summary = scorer.summarize(att_issues)
+                        att_duration = int((_time_module.time() - check_start) * 1000)
+                        log_check(
+                            logger,
+                            run_id,
+                            "attendance",
+                            len(att_issues),
+                            att_duration,
+                            {k: v for k, v in att_summary.items() if "attendance" in k},
+                        )
+                        self._firestore_writer.write_log(run_id, "info", f"Attendance check: {len(att_issues)} issues found in {(att_duration/1000):.1f}s")
+                    else:
+                        att_issues = []
+                        self._firestore_writer.write_log(run_id, "info", "Attendance check skipped (not selected in rules)")
+                    
+                    # Merge and summarize issues
                     issues = check_results
+                    total_issues_before_merge = len(issues)
+                    self._firestore_writer.write_log(run_id, "info", f"Merging duplicate issues from {total_issues_before_merge} total issues...")
                     merged = scorer.merge(issues)
+                    merged_count = len(merged)
+                    self._firestore_writer.write_log(run_id, "info", f"Merged to {merged_count} unique issues (removed {total_issues_before_merge - merged_count} duplicates)")
+                    
+                    self._firestore_writer.write_log(run_id, "info", "Calculating issue summary...")
                     summary = scorer.summarize(merged)
+                    total_issues = sum(summary.values())
+                    self._firestore_writer.write_log(run_id, "info", f"Prepared {total_issues} total issues for writing")
             except Exception as exc:
                 logger.error("Check execution failed catastrophically", extra={"run_id": run_id}, exc_info=True)
                 failed_checks.append("all")
@@ -543,44 +593,15 @@ class IntegrityRunner:
                 # Fail fast - don't continue with empty results when all checks fail
                 raise IntegrityRunError(run_id, error_message, transient=False) from exc
 
-            # Write to Airtable
-            try:
-                if issues:
-                    with timed("write_airtable", metrics):
-                        airtable_writer.upsert(merged if issues else [])
-                    log_write(logger, run_id, "airtable", len(merged) if issues else 0, metrics.get("duration_write_airtable", 0))
-            except Exception as exc:
-                logger.error("Airtable write failed", extra={"run_id": run_id}, exc_info=True)
-                failed_checks.append("airtable_write")
-                if status == "success":
-                    status = "warning"
-                error_message = (error_message or "") + f" Airtable write failed: {str(exc)}"
-
             # Always write to Firestore, even on failure
+            # Keep status as "running" until all Firestore operations are complete
             try:
                 with timed("write_firestore", metrics):
-                    # Calculate result status BEFORE writing if run completed successfully
-                    # Only calculate result status if run completed successfully (no technical errors)
-                    if (status == "running" or status == "success") and not failed_checks and not error_message:
-                        # Calculate result status based on issue counts
-                        # summary is from scorer.summarize() - flat dict with keys like "issue_type:severity"
-                        summary_for_calc = summary if "summary" in locals() and summary else {}
-                        result_status = calculate_result_status(summary_for_calc)
-                        logger.info(
-                            "Calculated result status",
-                            extra={
-                                "run_id": run_id,
-                                "previous_status": status,
-                                "result_status": result_status,
-                                "summary_total": sum(summary_for_calc.values()) if summary_for_calc else 0,
-                            },
-                        )
-                        status = result_status
-                    
+                    # Write initial run metadata with "running" status (will be updated after all operations complete)
                     run_metadata = {
                         "trigger": trigger,
                         "entity_counts": entity_counts,
-                        "status": status,
+                        "status": status,  # Still "running" at this point
                         "started_at": start_time,  # Keep original start time
                         "config_version": config_version,
                         **metrics,
@@ -591,6 +612,7 @@ class IntegrityRunner:
                         run_metadata["error_message"] = error_message
 
                     # Update the existing document (merge=True in record_run)
+                    # This keeps the status as "running" while operations continue
                     try:
                         self._firestore_writer.write_run(run_id, summary, run_metadata)
                     except RuntimeError as exc:
@@ -606,16 +628,8 @@ class IntegrityRunner:
                             exc_info=True,
                         )
                     
-                    # Write metrics if run completed successfully (healthy, warning, or critical - not failed)
-                    if status in ("healthy", "warning", "critical", "success"):
-                        try:
-                            metrics_payload = {**summary, **entity_counts}
-                            self._firestore_writer.write_metrics(metrics_payload)
-                        except Exception as exc:
-                            logger.warning(
-                                "Failed to write metrics to Firestore",
-                                extra={"run_id": run_id, "error": str(exc)},
-                            )
+                    # Write metrics if run completed successfully (will check status after all operations)
+                    # This will be done after status is calculated below
                     
                     # Write individual issues to Firestore
                     new_issues_count = 0
@@ -640,6 +654,39 @@ class IntegrityRunner:
                     
                     # Analyze ignored issues and flag rules (nightly runs only)
                     # Only run feedback analysis if run completed successfully (not failed)
+                    # Status check will be done after status is calculated below
+                    
+                    # NOW calculate final status after all Firestore operations are complete
+                    # Only calculate result status if run completed successfully (no technical errors)
+                    if (status == "running" or status == "success") and not failed_checks and not error_message:
+                        # Calculate result status based on issue counts
+                        # summary is from scorer.summarize() - flat dict with keys like "issue_type:severity"
+                        summary_for_calc = summary if "summary" in locals() and summary else {}
+                        result_status = calculate_result_status(summary_for_calc)
+                        logger.info(
+                            "Calculated result status",
+                            extra={
+                                "run_id": run_id,
+                                "previous_status": status,
+                                "result_status": result_status,
+                                "summary_total": sum(summary_for_calc.values()) if summary_for_calc else 0,
+                            },
+                        )
+                        status = result_status
+                    
+                    # Write metrics if run completed successfully (healthy, warning, or critical - not failed)
+                    if status in ("healthy", "warning", "critical", "success"):
+                        try:
+                            metrics_payload = {**summary, **entity_counts}
+                            self._firestore_writer.write_metrics(metrics_payload)
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to write metrics to Firestore",
+                                extra={"run_id": run_id, "error": str(exc)},
+                            )
+                    
+                    # Analyze ignored issues and flag rules (nightly runs only)
+                    # Only run feedback analysis if run completed successfully (not failed)
                     if trigger == "nightly" and status in ("healthy", "warning", "critical", "success"):
                         try:
                             with timed("feedback_analysis", metrics):
@@ -661,7 +708,28 @@ class IntegrityRunner:
                     
                     log_write(logger, run_id, "firestore", 1, metrics.get("duration_write_firestore", 0))
                     
-                    # Status was already calculated and written above, no need to recalculate here
+                    # Write final status to Firestore now that all operations are complete
+                    final_metadata = {
+                        "trigger": trigger,
+                        "entity_counts": entity_counts,
+                        "status": status,  # Final calculated status
+                        "started_at": start_time,
+                        "config_version": config_version,
+                        **metrics,
+                    }
+                    if failed_checks:
+                        final_metadata["failed_checks"] = failed_checks
+                    if error_message:
+                        final_metadata["error_message"] = error_message
+                    
+                    try:
+                        self._firestore_writer.write_run(run_id, summary, final_metadata)
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to write final status to Firestore",
+                            extra={"run_id": run_id, "error": str(exc)},
+                            exc_info=True,
+                        )
             except Exception as exc:
                 logger.error("Firestore write failed", extra={"run_id": run_id}, exc_info=True)
                 # This is critical - log but don't fail the run
@@ -839,7 +907,15 @@ class IntegrityRunner:
                     except Exception:
                         pass
                 
-                data = fetcher.fetch()
+                # Create progress callback that writes to Firestore logs
+                def log_progress(message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+                    if run_id:
+                        try:
+                            self._firestore_writer.write_log(run_id, "info", message, metadata)
+                        except Exception:
+                            pass
+                
+                data = fetcher.fetch(progress_callback=log_progress if run_id else None)
                 records[key] = data
                 counts[key] = len(data)
                 
@@ -865,10 +941,101 @@ class IntegrityRunner:
                 raise FetchError(key, f"Failed to fetch {key}: {str(exc)}", "unknown") from exc
         return records, counts
 
+    def _filter_rules_by_selection(
+        self, schema_config: SchemaConfig, run_config: Dict[str, Any] | None
+    ) -> SchemaConfig:
+        """Filter SchemaConfig based on selected rules in run_config.
+        
+        Args:
+            schema_config: Original SchemaConfig
+            run_config: Run configuration with optional rules selection
+            
+        Returns:
+            Filtered SchemaConfig with only selected rules
+        """
+        if not run_config or not run_config.get("rules"):
+            # No rule filtering requested, return original
+            return schema_config
+        
+        rules_selection = run_config["rules"]
+        
+        # Create a copy to avoid modifying the original
+        from copy import deepcopy
+        filtered_config = deepcopy(schema_config)
+        
+        # Filter duplicates
+        if "duplicates" in rules_selection and rules_selection["duplicates"]:
+            selected_dup = rules_selection["duplicates"]
+            for entity, rule_ids in selected_dup.items():
+                if entity in filtered_config.duplicates:
+                    dup_def = filtered_config.duplicates[entity]
+                    # Filter likely rules
+                    dup_def.likely = [
+                        rule for rule in dup_def.likely
+                        if rule.rule_id in rule_ids
+                    ]
+                    # Filter possible rules
+                    dup_def.possible = [
+                        rule for rule in dup_def.possible
+                        if rule.rule_id in rule_ids
+                    ]
+        
+        # Filter relationships
+        if "relationships" in rules_selection and rules_selection["relationships"]:
+            selected_rel = rules_selection["relationships"]
+            for entity, rel_keys in selected_rel.items():
+                if entity in filtered_config.entities:
+                    entity_schema = filtered_config.entities[entity]
+                    # Filter relationships dict to only include selected keys
+                    entity_schema.relationships = {
+                        key: rule
+                        for key, rule in entity_schema.relationships.items()
+                        if key in rel_keys
+                    }
+        
+        # Filter required fields
+        if "required_fields" in rules_selection and rules_selection["required_fields"]:
+            selected_req = rules_selection["required_fields"]
+            for entity, rule_ids in selected_req.items():
+                if entity in filtered_config.entities:
+                    entity_schema = filtered_config.entities[entity]
+                    # Filter missing_key_data array
+                    entity_schema.missing_key_data = [
+                        req for req in entity_schema.missing_key_data
+                        if (req.field in rule_ids or
+                            f"required.{entity}.{req.field}" in rule_ids or
+                            getattr(req, "rule_id", None) in rule_ids)
+                    ]
+        
+        # Note: attendance_rules is handled separately in attendance.run()
+        # since it's not part of SchemaConfig
+        
+        return filtered_config
+    
     def _execute_checks(self, records: Dict[str, List[dict]]) -> List[IssuePayload]:
+        # Get filtered schema config if run_config has rule selection
+        schema_config_to_use = self._schema_config
+        if hasattr(self, "_run_config") and self._run_config:
+            schema_config_to_use = self._filter_rules_by_selection(
+                self._schema_config,
+                self._run_config
+            )
+        
         results: List[IssuePayload] = []
-        results.extend(duplicates.run(records, self._schema_config))
-        results.extend(links.run(records, self._schema_config))
-        results.extend(required_fields.run(records, self._schema_config))
-        results.extend(attendance.run(records, self._runtime_config.attendance_rules))
+        results.extend(duplicates.run(records, schema_config_to_use))
+        results.extend(links.run(records, schema_config_to_use))
+        results.extend(required_fields.run(records, schema_config_to_use))
+        
+        # Handle attendance rules filtering
+        attendance_rules_to_use = self._runtime_config.attendance_rules
+        if (hasattr(self, "_run_config") and self._run_config and
+            self._run_config.get("rules") and
+            "attendance_rules" in self._run_config["rules"]):
+            # If attendance_rules is False in selection, skip attendance check
+            if self._run_config["rules"]["attendance_rules"] is False:
+                attendance_rules_to_use = None
+        
+        if attendance_rules_to_use:
+            results.extend(attendance.run(records, attendance_rules_to_use))
+        
         return results

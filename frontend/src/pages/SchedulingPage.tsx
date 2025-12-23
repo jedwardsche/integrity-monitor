@@ -6,7 +6,9 @@ import { useFirestoreSchedules } from "../hooks/useFirestoreSchedules";
 import { useFirestoreScheduleExecutions } from "../hooks/useFirestoreScheduleExecutions";
 import { useAuth } from "../hooks/useAuth";
 import { useRunStatus } from "../hooks/useRunStatus";
+import { useRules } from "../hooks/useRules";
 import ConfirmModal from "../components/ConfirmModal";
+import { RuleSelectionPanel } from "../components/RuleSelectionPanel";
 import arrowLeftIcon from "../assets/keyboard_arrow_left.svg";
 import arrowRightIcon from "../assets/keyboard_arrow_right.svg";
 import doubleArrowLeftIcon from "../assets/keyboard_double_arrow_left.svg";
@@ -539,6 +541,14 @@ export function SchedulingPage() {
     interval_minutes: undefined as number | undefined,
     times_of_day: undefined as string[] | undefined,
     entities: [] as string[],
+    rules: undefined as
+      | {
+          duplicates?: Record<string, string[]>;
+          relationships?: Record<string, string[]>;
+          required_fields?: Record<string, string[]>;
+          attendance_rules?: boolean;
+        }
+      | undefined,
     stop_condition_type: "none" as "none" | "max_runs" | "stop_at",
     max_runs: undefined as number | undefined,
     stop_at: undefined as string | undefined,
@@ -646,6 +656,11 @@ export function SchedulingPage() {
         scheduleData.run_config.entities = scheduleForm.entities;
       }
 
+      // Include rules if specified
+      if (scheduleForm.rules) {
+        scheduleData.run_config.rules = scheduleForm.rules;
+      }
+
       // Include stop condition fields if set
       if (
         scheduleForm.stop_condition_type === "max_runs" &&
@@ -676,6 +691,7 @@ export function SchedulingPage() {
         interval_minutes: undefined,
         times_of_day: undefined,
         entities: [],
+        rules: undefined,
         stop_condition_type: "none",
         max_runs: undefined,
         stop_at: undefined,
@@ -742,6 +758,11 @@ export function SchedulingPage() {
         updateData.run_config.entities = scheduleForm.entities;
       }
 
+      // Include rules if specified
+      if (scheduleForm.rules) {
+        updateData.run_config.rules = scheduleForm.rules;
+      }
+
       // Handle stop condition fields
       if (
         scheduleForm.stop_condition_type === "max_runs" &&
@@ -775,6 +796,7 @@ export function SchedulingPage() {
         interval_minutes: undefined,
         times_of_day: undefined,
         entities: [],
+        rules: undefined,
         stop_condition_type: "none",
         max_runs: undefined,
         stop_at: undefined,
@@ -855,6 +877,7 @@ export function SchedulingPage() {
       interval_minutes: schedule.interval_minutes,
       times_of_day: schedule.times_of_day,
       entities: schedule.run_config.entities || [],
+      rules: schedule.run_config.rules,
       stop_condition_type: stopConditionType,
       max_runs: maxRuns,
       stop_at: stopAt,
@@ -1639,6 +1662,12 @@ function CreateScheduleModal({
     interval_minutes?: number;
     times_of_day?: string[];
     entities: string[];
+    rules?: {
+      duplicates?: Record<string, string[]>;
+      relationships?: Record<string, string[]>;
+      required_fields?: Record<string, string[]>;
+      attendance_rules?: boolean;
+    };
     stop_condition_type: "none" | "max_runs" | "stop_at";
     max_runs?: number;
     stop_at?: string;
@@ -1651,6 +1680,93 @@ function CreateScheduleModal({
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(
     new Set(form.entities)
   );
+  const [rules, setRules] = useState<any>(null);
+  const [showRuleSelection, setShowRuleSelection] = useState(false);
+  const { loadRules, loading: rulesLoading } = useRules();
+
+  // Load rules when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const loadRulesData = async () => {
+      try {
+        const rulesData = await loadRules();
+        setRules(rulesData);
+      } catch (error) {
+        console.error("Failed to load rules:", error);
+      }
+    };
+
+    loadRulesData();
+  }, [isOpen, loadRules]);
+
+  // Sync selectedEntities with form.entities
+  useEffect(() => {
+    setSelectedEntities(new Set(form.entities));
+  }, [form.entities]);
+
+  // Get all rule IDs for an entity in a category
+  const getAllRuleIds = (
+    category: "duplicates" | "relationships" | "required_fields",
+    entityName: string
+  ): string[] => {
+    if (!rules) return [];
+    const categoryRules = rules[category]?.[entityName];
+    if (!categoryRules) return [];
+
+    if (category === "duplicates") {
+      const dupDef = categoryRules as { likely?: any[]; possible?: any[] };
+      const likelyIds = (dupDef.likely || []).map((r: any) => r.rule_id);
+      const possibleIds = (dupDef.possible || []).map((r: any) => r.rule_id);
+      return [...likelyIds, ...possibleIds];
+    } else if (category === "relationships") {
+      return Object.keys(categoryRules);
+    } else if (category === "required_fields") {
+      return (categoryRules as any[]).map(
+        (r: any) => r.rule_id || r.field || `required.${entityName}.${r.field}`
+      );
+    }
+    return [];
+  };
+
+  // Initialize rules for an entity (select all by default)
+  const initializeRulesForEntity = (entity: string) => {
+    if (!rules) return;
+
+    setForm({
+      ...form,
+      rules: {
+        ...form.rules,
+        duplicates: {
+          ...form.rules?.duplicates,
+          [entity]: getAllRuleIds("duplicates", entity),
+        },
+        relationships: {
+          ...form.rules?.relationships,
+          [entity]: getAllRuleIds("relationships", entity),
+        },
+        required_fields: {
+          ...form.rules?.required_fields,
+          [entity]: getAllRuleIds("required_fields", entity),
+        },
+      },
+    });
+  };
+
+  // Remove rules for an entity
+  const removeRulesForEntity = (entity: string) => {
+    const nextRules = { ...form.rules };
+    if (nextRules?.duplicates) {
+      delete nextRules.duplicates[entity];
+    }
+    if (nextRules?.relationships) {
+      delete nextRules.relationships[entity];
+    }
+    if (nextRules?.required_fields) {
+      delete nextRules.required_fields[entity];
+    }
+    setForm({ ...form, rules: nextRules });
+  };
 
   if (!isOpen) return null;
 
@@ -1658,11 +1774,34 @@ function CreateScheduleModal({
     const next = new Set(selectedEntities);
     if (next.has(entity)) {
       next.delete(entity);
+      removeRulesForEntity(entity);
     } else {
       next.add(entity);
+      initializeRulesForEntity(entity);
     }
     setSelectedEntities(next);
     setForm({ ...form, entities: Array.from(next) });
+  };
+
+  const handleRulesChange = (
+    category:
+      | "duplicates"
+      | "relationships"
+      | "required_fields"
+      | "attendance_rules",
+    entity: string,
+    ruleIds: string[] | boolean
+  ) => {
+    const nextRules = { ...form.rules };
+    if (category === "attendance_rules") {
+      nextRules.attendance_rules = ruleIds as boolean;
+    } else {
+      if (!nextRules[category]) {
+        nextRules[category] = {};
+      }
+      nextRules[category]![entity] = ruleIds as string[];
+    }
+    setForm({ ...form, rules: nextRules });
   };
 
   const handleSelectAllEntities = () => {
@@ -2074,6 +2213,62 @@ function CreateScheduleModal({
                 Leave empty to scan all entities
               </p>
             </div>
+
+            {/* Rule Selection Section */}
+            {selectedEntities.size > 0 && rules && (
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="block text-sm font-medium text-[var(--text-main)]">
+                    Rule Selection
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowRuleSelection(!showRuleSelection)}
+                    className="text-sm text-[var(--brand)] hover:underline"
+                  >
+                    {showRuleSelection ? "Hide" : "Show"} Rules
+                  </button>
+                </div>
+                {showRuleSelection && (
+                  <div className="space-y-3 max-h-96 overflow-y-auto border border-[var(--border)] rounded-lg p-3">
+                    {Array.from(selectedEntities).map((entity) => (
+                      <RuleSelectionPanel
+                        key={entity}
+                        entity={entity}
+                        rules={rules}
+                        selectedRules={form.rules || {}}
+                        onRulesChange={handleRulesChange}
+                        entityDisplayName={
+                          ENTITY_TABLE_MAPPING[entity] || entity
+                        }
+                      />
+                    ))}
+                    {/* Attendance rules (not per-entity) */}
+                    {rules.attendance_rules && (
+                      <div className="border border-[var(--border)] rounded-lg p-3 bg-[var(--bg-mid)]/30">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={form.rules?.attendance_rules ?? true}
+                            onChange={(e) =>
+                              handleRulesChange(
+                                "attendance_rules",
+                                "",
+                                e.target.checked
+                              )
+                            }
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm font-medium text-[var(--text-main)]">
+                            Attendance Rules
+                          </span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

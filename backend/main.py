@@ -5,8 +5,8 @@ import time
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException, Request, status, Depends, Query
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, HTTPException, Request, status, Depends, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
@@ -342,7 +342,13 @@ def schema():
     return schema_config.model_dump()
 
 
-def _run_integrity_background(run_id: str, trigger: str, cancel_event: threading.Event, entities: list[str] = None):
+def _run_integrity_background(
+    run_id: str,
+    trigger: str,
+    cancel_event: threading.Event,
+    entities: Optional[List[str]] = None,
+    run_config: Optional[Dict[str, Any]] = None
+):
     """Run integrity scan in background thread."""
     try:
         # Create a new runner instance for this thread
@@ -350,7 +356,13 @@ def _run_integrity_background(run_id: str, trigger: str, cancel_event: threading
             logger.error("IntegrityRunner not available - cannot start scan", extra={"run_id": run_id})
             return
         thread_runner = IntegrityRunner()
-        result = thread_runner.run(run_id=run_id, trigger=trigger, cancel_event=cancel_event, entities=entities)
+        result = thread_runner.run(
+            run_id=run_id,
+            trigger=trigger,
+            cancel_event=cancel_event,
+            entities=entities,
+            run_config=run_config
+        )
         logger.info(
             "Integrity run completed",
             extra={"run_id": run_id, "status": result.get("status", "success")},
@@ -368,13 +380,19 @@ def _run_integrity_background(run_id: str, trigger: str, cancel_event: threading
 
 
 @app.post("/integrity/run", dependencies=[Depends(verify_cloud_scheduler_auth)])
-def run_integrity(request: Request, trigger: str = "manual", entities: Optional[List[str]] = Query(default=None)):
+def run_integrity(
+    request: Request,
+    trigger: str = "manual",
+    entities: Optional[List[str]] = Query(default=None),
+    run_config: Optional[Dict[str, Any]] = Body(default=None)
+):
     """Trigger the integrity runner (runs in background).
 
     Args:
         request: FastAPI request object (injected)
-        trigger: Trigger source ("nightly", "weekly", or "manual")
-        entities: Optional list of entity names to scan (if not provided, scans all entities)
+        trigger: Trigger source ("nightly", "weekly", "schedule", or "manual")
+        entities: Optional list of entity names to scan (deprecated, use run_config.entities)
+        run_config: Optional run configuration with entities and rules
 
     Returns:
         - 200: Success with run_id (scan runs in background)
@@ -382,7 +400,24 @@ def run_integrity(request: Request, trigger: str = "manual", entities: Optional[
     """
     # Get request ID from middleware
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.info("Integrity run requested", extra={"trigger": trigger, "entities": entities, "request_id": request_id})
+    
+    # Merge entities from query param and run_config (run_config takes precedence)
+    final_entities = None
+    if run_config and run_config.get("entities"):
+        final_entities = run_config["entities"]
+    elif entities:
+        final_entities = entities
+    
+    logger.info(
+        "Integrity run requested",
+        extra={
+            "trigger": trigger,
+            "entities": final_entities,
+            "has_run_config": run_config is not None,
+            "has_rules": run_config is not None and "rules" in run_config if run_config else False,
+            "request_id": request_id
+        }
+    )
 
     try:
         # Generate run_id first
@@ -399,7 +434,7 @@ def run_integrity(request: Request, trigger: str = "manual", entities: Optional[
         # Start background thread
         thread = threading.Thread(
             target=_run_integrity_background,
-            args=(run_id, trigger, cancel_event, entities),
+            args=(run_id, trigger, cancel_event, final_entities, run_config),
             daemon=True,
         )
         thread.start()
@@ -559,8 +594,6 @@ def cancel_integrity_run(run_id: str, request: Request):
             update_data["duration_fetch"] = run_data["duration_fetch"]
         if "duration_checks" in run_data:
             update_data["duration_checks"] = run_data["duration_checks"]
-        if "duration_write_airtable" in run_data:
-            update_data["duration_write_airtable"] = run_data["duration_write_airtable"]
         if "duration_write_firestore" in run_data:
             update_data["duration_write_firestore"] = run_data["duration_write_firestore"]
         if "duration_write_issues_firestore" in run_data:
@@ -624,6 +657,189 @@ def delete_integrity_run(run_id: str, request: Request):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "Failed to delete run", "message": str(exc), "run_id": run_id},
+        )
+
+
+@app.post("/integrity/runs/cancel-all", dependencies=[Depends(verify_cloud_scheduler_auth)])
+def cancel_all_running_runs(request: Request):
+    """Cancel all currently running integrity runs.
+    
+    Returns:
+        - 200: Success with count of cancelled runs
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.info("Cancel all running runs requested", extra={"request_id": request_id})
+    
+    try:
+        from .clients.firestore import FirestoreClient
+        from .config.config_loader import load_runtime_config
+        from .writers.firestore_writer import FirestoreWriter
+        
+        config = load_runtime_config()
+        firestore_client = FirestoreClient(config.firestore)
+        client = firestore_client._get_client()
+        collection_ref = client.collection(config.firestore.runs_collection)
+        
+        # Query for all runs with status "running" or missing status (treat as running)
+        running_runs_query = collection_ref.where("status", "==", "running")
+        running_runs = list(running_runs_query.stream())
+        
+        # Also check for runs without status field (might be running)
+        all_runs_query = collection_ref.stream()
+        runs_without_status = [
+            doc for doc in all_runs_query 
+            if not doc.to_dict().get("status") or doc.to_dict().get("status", "").strip() == ""
+        ]
+        
+        # Combine and deduplicate
+        all_running_run_ids = set()
+        for doc in running_runs:
+            all_running_run_ids.add(doc.id)
+        for doc in runs_without_status:
+            all_running_run_ids.add(doc.id)
+        
+        cancelled_count = 0
+        errors = []
+        
+        # Cancel each running run
+        for run_id in all_running_run_ids:
+            try:
+                # Try to cancel via in-memory event first
+                with running_scans_lock:
+                    cancel_event = running_scans.get(run_id)
+                    if cancel_event:
+                        cancel_event.set()
+                        logger.info("Cancellation signal sent to running scan", extra={"run_id": run_id})
+                
+                # Update Firestore status
+                doc_ref = collection_ref.document(run_id)
+                run_doc = doc_ref.get()
+                
+                if not run_doc.exists:
+                    continue
+                
+                run_data = run_doc.to_dict()
+                run_status = run_data.get("status", "").lower()
+                completed_statuses = ["success", "error", "warning", "cancelled", "canceled", "healthy"]
+                
+                if run_status in completed_statuses:
+                    continue
+                
+                # Calculate duration
+                started_at = run_data.get("started_at")
+                end_time = datetime.now(timezone.utc)
+                duration_ms = 0
+                if started_at:
+                    if hasattr(started_at, "timestamp"):
+                        start_timestamp = started_at.timestamp()
+                    else:
+                        start_timestamp = started_at
+                    end_timestamp = end_time.timestamp()
+                    duration_ms = int((end_timestamp - start_timestamp) * 1000)
+                
+                # Update run status to cancelled
+                update_data = {
+                    "status": "cancelled",
+                    "ended_at": end_time,
+                    "duration_ms": duration_ms,
+                }
+                firestore_client.record_run(run_id, update_data)
+                
+                # Log cancellation
+                writer = FirestoreWriter(firestore_client)
+                writer.write_log(run_id, "info", "Scan cancelled by user (cancel all)")
+                
+                cancelled_count += 1
+            except Exception as exc:
+                errors.append({"run_id": run_id, "error": str(exc)})
+                logger.error(
+                    f"Failed to cancel run {run_id}",
+                    extra={"run_id": run_id, "error": str(exc)},
+                    exc_info=True,
+                )
+        
+        logger.info(
+            "Cancel all running runs completed",
+            extra={"cancelled_count": cancelled_count, "errors": len(errors), "request_id": request_id},
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Cancelled {cancelled_count} running run(s)",
+            "cancelled_count": cancelled_count,
+            "errors": errors,
+        }
+        
+    except Exception as exc:
+        logger.error(
+            "Failed to cancel all running runs",
+            extra={"error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to cancel all running runs", "message": str(exc)},
+        )
+
+
+@app.delete("/integrity/runs/all", dependencies=[Depends(verify_cloud_scheduler_auth)])
+def delete_all_runs(request: Request):
+    """Delete all integrity runs and their associated logs.
+    
+    Returns:
+        - 200: Success with count of deleted runs
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.info("Delete all runs requested", extra={"request_id": request_id})
+    
+    try:
+        from .clients.firestore import FirestoreClient
+        from .config.config_loader import load_runtime_config
+        
+        config = load_runtime_config()
+        firestore_client = FirestoreClient(config.firestore)
+        client = firestore_client._get_client()
+        collection_ref = client.collection(config.firestore.runs_collection)
+        
+        # Get all runs
+        all_runs = list(collection_ref.stream())
+        deleted_count = 0
+        errors = []
+        
+        # Delete each run
+        for doc in all_runs:
+            try:
+                firestore_client.delete_run(doc.id)
+                deleted_count += 1
+            except Exception as exc:
+                errors.append({"run_id": doc.id, "error": str(exc)})
+                logger.error(
+                    f"Failed to delete run {doc.id}",
+                    extra={"run_id": doc.id, "error": str(exc)},
+                    exc_info=True,
+                )
+        
+        logger.info(
+            "Delete all runs completed",
+            extra={"deleted_count": deleted_count, "errors": len(errors), "request_id": request_id},
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Deleted {deleted_count} run(s)",
+            "deleted_count": deleted_count,
+            "errors": errors,
+        }
+        
+    except Exception as exc:
+        logger.error(
+            "Failed to delete all runs",
+            extra={"error": str(exc), "request_id": request_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Failed to delete all runs", "message": str(exc)},
         )
 
 
@@ -755,18 +971,16 @@ def airtable_records(table_id: str):
         from pyairtable import Api
         from requests.exceptions import HTTPError, RequestException
         
-        # Try PAT first (personal access token), fall back to API_KEY for backwards compatibility
+        # Use Personal Access Token (PAT) for Airtable authentication
         pat = os.getenv("AIRTABLE_PAT")
-        api_key = os.getenv("AIRTABLE_API_KEY")
         
-        if not pat and not api_key:
+        if not pat:
             raise HTTPException(
                 status_code=500,
-                detail="AIRTABLE_PAT or AIRTABLE_API_KEY environment variable must be set"
+                detail="AIRTABLE_PAT environment variable must be set"
             )
         
-        # Use PAT if available, otherwise use API_KEY
-        token = pat or api_key
+        token = pat
         api = Api(token)
         table = api.table(base_id, table_id)
         
@@ -1260,17 +1474,16 @@ def get_airtable_records_by_ids(request: Request, body: RecordsByIdsRequest):
             )
             return {"records": {}, "count": 0, "error": f"Table not found for entity: {entity}"}
 
-        # Get Airtable API client
+        # Get Airtable API client using Personal Access Token (PAT)
         pat = os.getenv("AIRTABLE_PAT")
-        api_key = os.getenv("AIRTABLE_API_KEY")
 
-        if not pat and not api_key:
+        if not pat:
             raise HTTPException(
                 status_code=500,
-                detail="AIRTABLE_PAT or AIRTABLE_API_KEY environment variable must be set"
+                detail="AIRTABLE_PAT environment variable must be set"
             )
 
-        token = pat or api_key
+        token = pat
         api = Api(token)
         table = api.table(base_id, table_id)
 

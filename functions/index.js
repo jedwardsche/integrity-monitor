@@ -248,29 +248,47 @@ exports.runScheduledScans = onSchedule(
 
           // Trigger the backend run
           const entities = runConfig.entities || [];
+          const rules = runConfig.rules;
 
           const params = new URLSearchParams({
             trigger: "schedule",
           });
 
+          // Build request body with run_config
+          const requestBody = {};
           if (entities.length > 0) {
+            requestBody.entities = entities;
+            // Also add to query params for backward compatibility
             entities.forEach((entity) => {
               params.append("entities", entity);
             });
           }
+          if (rules) {
+            requestBody.rules = rules;
+          }
 
           const url = `${INTEGRITY_RUNNER_URL}/integrity/run?${params.toString()}`;
-          logger.info(`Triggering run for schedule ${scheduleId}`, { url, entities });
+          logger.info(`Triggering run for schedule ${scheduleId}`, { url, entities, has_rules: !!rules });
 
           let runId = null;
+          let timeoutId = null;
           try {
+            // Add timeout to prevent hanging if backend is slow/unreachable
+            const controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
             const response = await fetch(url, {
               method: "POST",
               headers: {
                 Authorization: `Bearer ${API_AUTH_TOKEN}`,
                 "Content-Type": "application/json",
               },
+              body: Object.keys(requestBody).length > 0 ? JSON.stringify({ run_config: requestBody }) : undefined,
+              signal: controller.signal,
             });
+            
+            clearTimeout(timeoutId);
+            timeoutId = null;
 
             if (!response.ok) {
               const errorText = await response.text();
@@ -303,10 +321,23 @@ exports.runScheduledScans = onSchedule(
               });
             });
           } catch (error) {
-            logger.error(`Failed to trigger run for schedule ${scheduleId}`, {
-              error: error.message,
-              stack: error.stack,
-            });
+            // Clear timeout in case of error (if not already cleared)
+            if (timeoutId !== null) {
+              clearTimeout(timeoutId);
+            }
+            
+            // Handle timeout errors specifically
+            if (error.name === 'AbortError') {
+              logger.error(`Request to backend timed out after 30 seconds for schedule ${scheduleId}`, {
+                error: error.message,
+                url,
+              });
+            } else {
+              logger.error(`Failed to trigger run for schedule ${scheduleId}`, {
+                error: error.message,
+                stack: error.stack,
+              });
+            }
 
             // Update execution with error
             const executionRef = db

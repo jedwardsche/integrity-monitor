@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useAuth } from "../hooks/useAuth";
+import { useRules } from "../hooks/useRules";
 import type { AirtableSchema, AirtableTable } from "../utils/airtable";
+import { RuleSelectionPanel } from "./RuleSelectionPanel";
 
 export interface ScanConfig {
   checks: {
@@ -10,6 +12,12 @@ export interface ScanConfig {
     attendance: boolean;
   };
   entities?: string[]; // Optional: selected entity names to scan
+  rules?: {
+    duplicates?: Record<string, string[]>;
+    relationships?: Record<string, string[]>;
+    required_fields?: Record<string, string[]>;
+    attendance_rules?: boolean;
+  };
 }
 
 interface ScanConfigModalProps {
@@ -53,7 +61,32 @@ export function ScanConfigModal({
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(
     new Set(Object.keys(ENTITY_TABLE_MAPPING))
   );
+  const [selectedRules, setSelectedRules] = useState<{
+    duplicates?: Record<string, string[]>;
+    relationships?: Record<string, string[]>;
+    required_fields?: Record<string, string[]>;
+    attendance_rules?: boolean;
+  }>({});
+  const [showRuleSelection, setShowRuleSelection] = useState(false);
   const { getToken } = useAuth();
+  const { loadRules, loading: rulesLoading } = useRules();
+  const [rules, setRules] = useState<any>(null);
+
+  // Load rules when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const loadRulesData = async () => {
+      try {
+        const rulesData = await loadRules();
+        setRules(rulesData);
+      } catch (error) {
+        console.error("Failed to load rules:", error);
+      }
+    };
+
+    loadRulesData();
+  }, [isOpen, loadRules]);
 
   // Fetch schema when modal opens - load from local JSON first for instant display
   useEffect(() => {
@@ -145,13 +178,108 @@ export function ScanConfigModal({
     }));
   };
 
+  // Get all rule IDs for an entity in a category
+  const getAllRuleIds = (
+    category: "duplicates" | "relationships" | "required_fields",
+    entityName: string
+  ): string[] => {
+    if (!rules) return [];
+    const categoryRules = rules[category]?.[entityName];
+    if (!categoryRules) return [];
+
+    if (category === "duplicates") {
+      const dupDef = categoryRules as { likely?: any[]; possible?: any[] };
+      const likelyIds = (dupDef.likely || []).map((r: any) => r.rule_id);
+      const possibleIds = (dupDef.possible || []).map((r: any) => r.rule_id);
+      return [...likelyIds, ...possibleIds];
+    } else if (category === "relationships") {
+      return Object.keys(categoryRules);
+    } else if (category === "required_fields") {
+      return (categoryRules as any[]).map(
+        (r: any) => r.rule_id || r.field || `required.${entityName}.${r.field}`
+      );
+    }
+    return [];
+  };
+
+  // Initialize rules for an entity (select all by default)
+  const initializeRulesForEntity = (entity: string) => {
+    if (!rules) return;
+
+    setSelectedRules((prev) => {
+      const next = { ...prev };
+
+      // Duplicates
+      const dupIds = getAllRuleIds("duplicates", entity);
+      if (dupIds.length > 0) {
+        next.duplicates = { ...next.duplicates, [entity]: dupIds };
+      }
+
+      // Relationships
+      const relIds = getAllRuleIds("relationships", entity);
+      if (relIds.length > 0) {
+        next.relationships = { ...next.relationships, [entity]: relIds };
+      }
+
+      // Required fields
+      const reqIds = getAllRuleIds("required_fields", entity);
+      if (reqIds.length > 0) {
+        next.required_fields = { ...next.required_fields, [entity]: reqIds };
+      }
+
+      return next;
+    });
+  };
+
+  // Remove rules for an entity
+  const removeRulesForEntity = (entity: string) => {
+    setSelectedRules((prev) => {
+      const next = { ...prev };
+      if (next.duplicates) {
+        delete next.duplicates[entity];
+      }
+      if (next.relationships) {
+        delete next.relationships[entity];
+      }
+      if (next.required_fields) {
+        delete next.required_fields[entity];
+      }
+      return next;
+    });
+  };
+
   const handleEntityToggle = (entity: string) => {
     setSelectedEntities((prev) => {
       const next = new Set(prev);
       if (next.has(entity)) {
         next.delete(entity);
+        removeRulesForEntity(entity);
       } else {
         next.add(entity);
+        initializeRulesForEntity(entity);
+      }
+      return next;
+    });
+  };
+
+  const handleRulesChange = (
+    category:
+      | "duplicates"
+      | "relationships"
+      | "required_fields"
+      | "attendance_rules",
+    entity: string,
+    ruleIds: string[] | boolean
+  ) => {
+    setSelectedRules((prev) => {
+      const next = { ...prev };
+      if (category === "attendance_rules") {
+        next.attendance_rules = ruleIds as boolean;
+      } else {
+        if (!next[category]) {
+          next[category] = {};
+        }
+        next[category]![entity] = ruleIds as string[];
       }
       return next;
     });
@@ -166,10 +294,21 @@ export function ScanConfigModal({
   };
 
   const handleConfirm = () => {
+    // Only include rules if at least one category has selections
+    const hasRules =
+      (selectedRules.duplicates &&
+        Object.keys(selectedRules.duplicates).length > 0) ||
+      (selectedRules.relationships &&
+        Object.keys(selectedRules.relationships).length > 0) ||
+      (selectedRules.required_fields &&
+        Object.keys(selectedRules.required_fields).length > 0) ||
+      selectedRules.attendance_rules !== undefined;
+
     onConfirm({
       checks,
       entities:
         selectedEntities.size > 0 ? Array.from(selectedEntities) : undefined,
+      rules: hasRules ? selectedRules : undefined,
     });
   };
 
@@ -184,7 +323,7 @@ export function ScanConfigModal({
         aria-hidden="true"
       />
 
-      <div className="relative bg-white border border-[var(--border)] rounded-xl shadow-xl w-full max-w-4xl transform transition-all p-6">
+      <div className="relative bg-white border border-[var(--border)] rounded-xl shadow-xl w-full max-w-5xl max-h-[90vh] overflow-y-auto transform transition-all p-6">
         <h3
           className="text-xl font-semibold text-[var(--text-main)] mb-4"
           style={{ fontFamily: "Outfit" }}
@@ -338,6 +477,62 @@ export function ScanConfigModal({
                 </p>
               )}
             </div>
+
+            {/* Rule Selection Section */}
+            {selectedEntities.size > 0 && rules && (
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="block text-sm font-medium text-[var(--text-main)]">
+                    Rule Selection
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowRuleSelection(!showRuleSelection)}
+                    className="text-sm text-[var(--brand)] hover:underline"
+                  >
+                    {showRuleSelection ? "Hide" : "Show"} Rules
+                  </button>
+                </div>
+                {showRuleSelection && (
+                  <div className="space-y-3 max-h-96 overflow-y-auto border border-[var(--border)] rounded-lg p-3">
+                    {Array.from(selectedEntities).map((entity) => (
+                      <RuleSelectionPanel
+                        key={entity}
+                        entity={entity}
+                        rules={rules}
+                        selectedRules={selectedRules}
+                        onRulesChange={handleRulesChange}
+                        entityDisplayName={
+                          ENTITY_TABLE_MAPPING[entity] || entity
+                        }
+                      />
+                    ))}
+                    {/* Attendance rules (not per-entity) */}
+                    {checks.attendance && rules.attendance_rules && (
+                      <div className="border border-[var(--border)] rounded-lg p-3 bg-[var(--bg-mid)]/30">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedRules.attendance_rules ?? true}
+                            onChange={(e) =>
+                              handleRulesChange(
+                                "attendance_rules",
+                                "",
+                                e.target.checked
+                              )
+                            }
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm font-medium text-[var(--text-main)]">
+                            Attendance Rules
+                          </span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
