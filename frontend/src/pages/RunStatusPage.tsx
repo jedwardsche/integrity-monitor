@@ -187,25 +187,48 @@ export function RunStatusPage() {
           let entity: string | undefined = undefined;
           let ruleIdForNav = ruleId;
 
+          // Entity pluralization mapping
+          const entityPluralMap: Record<string, string> = {
+            student: "students",
+            students: "students",
+            parent: "parents",
+            parents: "parents",
+            contractor: "contractors",
+            contractors: "contractors",
+            class: "classes",
+            classes: "classes",
+            attendance: "attendance",
+            truth: "truth",
+            payment: "payments",
+            payments: "payments",
+            data_issue: "data_issues",
+            data_issues: "data_issues",
+          };
+
           if (ruleId.startsWith("dup.")) {
             category = "duplicates";
             const parts = ruleId.split(".");
             if (parts.length >= 3) {
-              entity = parts[1];
-              ruleIdForNav = ruleId; // Full rule_id for duplicates
+              const entitySingular = parts[1];
+              entity = entityPluralMap[entitySingular] || entitySingular;
+              // Extract just the field name (last part) for duplicates
+              ruleIdForNav = parts[parts.length - 1];
             }
           } else if (ruleId.startsWith("link.")) {
             category = "relationships";
             const parts = ruleId.split(".");
             if (parts.length >= 2) {
-              entity = parts[1];
-              ruleIdForNav = ruleId; // Full rule_id for relationships
+              const entitySingular = parts[1];
+              entity = entityPluralMap[entitySingular] || entitySingular;
+              // For relationships, use the relationship key (everything after entity)
+              ruleIdForNav = parts.slice(2).join(".") || parts[1];
             }
           } else if (ruleId.startsWith("required.")) {
             category = "required_fields";
             const parts = ruleId.split(".");
             if (parts.length >= 3) {
-              entity = parts[1];
+              const entitySingular = parts[1];
+              entity = entityPluralMap[entitySingular] || entitySingular;
               const field = parts[2];
               ruleIdForNav = field; // Just the field name for required_fields
             }
@@ -787,16 +810,12 @@ export function RunStatusPage() {
           ) : rulesUsed.length > 0 ? (
             <div className="flex flex-wrap gap-2">
               {rulesUsed.map((rule) => {
-                // Build navigation path based on category
+                // Build navigation path to rules page with entity highlight
                 let navPath = "";
-                if (rule.category === "duplicates" && rule.entity) {
-                  navPath = `/rules/duplicates/${rule.entity}/${rule.ruleId}`;
-                } else if (rule.category === "relationships" && rule.entity) {
-                  navPath = `/rules/relationships/${rule.entity}/${rule.ruleId}`;
-                } else if (rule.category === "required_fields" && rule.entity) {
-                  navPath = `/rules/required_fields/${rule.entity}/${rule.ruleId}`;
+                if (rule.entity) {
+                  navPath = `/rules?entity=${rule.entity}`;
                 } else if (rule.category === "attendance_rules") {
-                  navPath = `/rules/attendance_rules/${rule.ruleId}`;
+                  navPath = `/rules?entity=attendance`;
                 }
 
                 return (
@@ -996,7 +1015,7 @@ export function RunStatusPage() {
             {/* Tab Content */}
             {activeIssueTab === "new" ? (
               <IssueList
-                key="new-issues"
+                key={`new-issues-${runId}`}
                 filters={{
                   run_id: runId,
                   first_seen_in_run: runId,
@@ -1005,7 +1024,7 @@ export function RunStatusPage() {
               />
             ) : (
               <IssueList
-                key="all-issues"
+                key={`all-issues-${runId}`}
                 filters={{ run_id: runId, status: "all" }}
               />
             )}

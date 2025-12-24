@@ -4,89 +4,205 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .models import SchemaConfig
+from .models import (
+    DuplicateCondition,
+    DuplicateDefinition,
+    DuplicateRule,
+    EntitySchema,
+    FieldRequirement,
+    RelationshipRule,
+    SchemaConfig,
+    SchemaMetadata,
+)
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.yaml")
 
 
-def _deep_merge_schema(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """Deep merge override dict into base dict for schema config."""
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge_schema(result[key], value)
-        elif key in result and isinstance(result[key], list) and isinstance(value, list):
-            # For lists, merge by appending (or replace if needed)
-            result[key] = value  # Replace list entirely
-        else:
-            result[key] = value
-    return result
+def _convert_firestore_rules_to_schema_config(rules_data: Dict[str, Any]) -> SchemaConfig:
+    """Convert Firestore rules structure to SchemaConfig format.
 
-
-def _load_firestore_schema_overrides(firestore_client: Optional[Any] = None) -> Dict[str, Any]:
-    """Load schema configuration overrides from Firestore.
-    
     Args:
-        firestore_client: Optional FirestoreClient instance. If None, returns empty dict.
-    
+        rules_data: Dictionary from RulesService.get_all_rules()
+
     Returns:
-        Dict of override values for schema config, or empty dict if Firestore not available.
+        SchemaConfig instance built from Firestore rules
     """
-    if firestore_client is None:
-        return {}
-    
-    try:
-        client = firestore_client._get_client()
-        config_doc_path = firestore_client._config.config_document
-        parts = config_doc_path.split("/")
-        if len(parts) != 2:
-            return {}
-        
-        collection_name, doc_id = parts
-        doc_ref = client.collection(collection_name).document(doc_id)
-        doc = doc_ref.get()
-        
-        if doc.exists:
-            data = doc.to_dict() or {}
-            # Extract schema-related sections (entities, duplicates)
-            result = {}
-            for key in ["entities", "duplicates"]:
-                if key in data:
-                    result[key] = data[key]
-            return result
-    except Exception as exc:
-        logger.debug(f"Failed to load Firestore schema overrides: {exc}")
-    
-    return {}
+    # Build entities dict
+    entities: Dict[str, EntitySchema] = {}
+
+    # Get all entity names from relationships and required_fields
+    all_entities = set()
+    if "relationships" in rules_data:
+        all_entities.update(rules_data["relationships"].keys())
+    if "required_fields" in rules_data:
+        all_entities.update(rules_data["required_fields"].keys())
+    if "duplicates" in rules_data:
+        all_entities.update(rules_data["duplicates"].keys())
+
+    # Build entity schemas
+    for entity in all_entities:
+        # Get relationships for this entity
+        relationships: Dict[str, RelationshipRule] = {}
+        if "relationships" in rules_data and entity in rules_data["relationships"]:
+            for rel_key, rel_data in rules_data["relationships"][entity].items():
+                relationships[rel_key] = RelationshipRule(
+                    target=rel_data.get("target", ""),
+                    message=rel_data.get("message", ""),
+                    min_links=rel_data.get("min_links", 0),
+                    max_links=rel_data.get("max_links"),
+                    require_active=rel_data.get("require_active", False),
+                    allow_secondary=rel_data.get("allow_secondary", False),
+                    condition_field=rel_data.get("condition_field"),
+                    condition_value=rel_data.get("condition_value"),
+                    notes=rel_data.get("notes"),
+                    validate_bidirectional=rel_data.get("validate_bidirectional", False),
+                    reverse_relationship_key=rel_data.get("reverse_relationship_key"),
+                    cross_entity_validation=rel_data.get("cross_entity_validation"),
+                )
+
+        # Get required fields for this entity
+        missing_key_data: List[FieldRequirement] = []
+        if "required_fields" in rules_data and entity in rules_data["required_fields"]:
+            for req_data in rules_data["required_fields"][entity]:
+                # Include rule_id in FieldRequirement
+                missing_key_data.append(FieldRequirement(
+                    field=req_data.get("field", ""),
+                    message=req_data.get("message", ""),
+                    severity=req_data.get("severity", "warning"),
+                    alternate_fields=req_data.get("alternate_fields"),
+                    condition_field=req_data.get("condition_field"),
+                    condition_value=req_data.get("condition_value"),
+                    rule_id=req_data.get("rule_id"),  # Now part of the model
+                ))
+
+        entities[entity] = EntitySchema(
+            description=f"{entity.capitalize()} entity",
+            key_identifiers=[],  # Not stored in Firestore rules
+            identity_fields=[],  # Not stored in Firestore rules
+            relationships=relationships,
+            missing_key_data=missing_key_data,
+        )
+
+    # Build duplicates dict
+    duplicates: Dict[str, DuplicateDefinition] = {}
+    if "duplicates" in rules_data:
+        for entity, dup_data in rules_data["duplicates"].items():
+            likely_rules: List[DuplicateRule] = []
+            possible_rules: List[DuplicateRule] = []
+
+            # Process likely duplicates
+            if "likely" in dup_data:
+                for rule_data in dup_data["likely"]:
+                    conditions = []
+                    for cond_data in rule_data.get("conditions", []):
+                        # Map match_type to type (Firestore uses match_type, model uses type)
+                        cond_type = cond_data.get("match_type") or cond_data.get("type", "exact")
+                        conditions.append(DuplicateCondition(
+                            type=cond_type,
+                            field=cond_data.get("field"),
+                            fields=cond_data.get("fields"),
+                            tolerance_days=cond_data.get("tolerance_days"),
+                            similarity=cond_data.get("similarity"),
+                            overlap_ratio=cond_data.get("overlap_ratio"),
+                            description=cond_data.get("description"),
+                        ))
+                    likely_rules.append(DuplicateRule(
+                        rule_id=rule_data.get("rule_id", ""),
+                        description=rule_data.get("description", ""),
+                        conditions=conditions,
+                        severity=rule_data.get("severity", "warning"),
+                    ))
+
+            # Process possible duplicates
+            if "possible" in dup_data:
+                for rule_data in dup_data["possible"]:
+                    conditions = []
+                    for cond_data in rule_data.get("conditions", []):
+                        # Map match_type to type (Firestore uses match_type, model uses type)
+                        cond_type = cond_data.get("match_type") or cond_data.get("type", "exact")
+                        conditions.append(DuplicateCondition(
+                            type=cond_type,
+                            field=cond_data.get("field"),
+                            fields=cond_data.get("fields"),
+                            tolerance_days=cond_data.get("tolerance_days"),
+                            similarity=cond_data.get("similarity"),
+                            overlap_ratio=cond_data.get("overlap_ratio"),
+                            description=cond_data.get("description"),
+                        ))
+                    possible_rules.append(DuplicateRule(
+                        rule_id=rule_data.get("rule_id", ""),
+                        description=rule_data.get("description", ""),
+                        conditions=conditions,
+                        severity=rule_data.get("severity", "warning"),
+                    ))
+
+            duplicates[entity] = DuplicateDefinition(
+                likely=likely_rules,
+                possible=possible_rules,
+            )
+
+    return SchemaConfig(
+        metadata=SchemaMetadata(
+            source="firestore",
+            generated="runtime",
+        ),
+        entities=entities,
+        duplicates=duplicates,
+    )
 
 
 def load_schema_config(
     path: Optional[Path] = None,
     firestore_client: Optional[Any] = None,
 ) -> SchemaConfig:
-    """Load the schema config YAML into typed objects with optional Firestore overrides.
-    
+    """Load the schema config from Firestore rules.
+
+    IMPORTANT: This function now loads ONLY from Firestore using the RulesService.
+    It no longer loads from YAML to ensure that deleted rules don't persist.
+
     Args:
-        path: Optional path to schema.yaml file. Defaults to SCHEMA_PATH.
-        firestore_client: Optional FirestoreClient for loading overrides.
-    
+        path: DEPRECATED - No longer used. Kept for backward compatibility.
+        firestore_client: Optional FirestoreClient for loading rules.
+
     Returns:
-        SchemaConfig instance with merged overrides.
+        SchemaConfig instance built from Firestore rules.
     """
-    target = path or SCHEMA_PATH
-    with target.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
-    
-    # Load Firestore overrides if available
+    # Load rules from Firestore using RulesService
     if firestore_client:
-        overrides = _load_firestore_schema_overrides(firestore_client)
-        if overrides:
-            data = _deep_merge_schema(data, overrides)
-    
-    return SchemaConfig.model_validate(data)
+        try:
+            from ..services.rules_service import RulesService
+
+            rules_service = RulesService(firestore_client)
+            rules_data = rules_service.get_all_rules()
+
+            logger.info("Loaded schema config from Firestore rules")
+            return _convert_firestore_rules_to_schema_config(rules_data)
+        except Exception as exc:
+            logger.error(f"Failed to load schema from Firestore: {exc}", exc_info=True)
+            # Fall back to empty schema rather than YAML
+            logger.warning("Falling back to empty schema config")
+            return SchemaConfig(
+                metadata=SchemaMetadata(
+                    source="firestore-fallback",
+                    generated="runtime",
+                ),
+                entities={},
+                duplicates={},
+            )
+
+    # If no firestore_client provided, return empty schema
+    logger.warning("No Firestore client provided, returning empty schema config")
+    return SchemaConfig(
+        metadata=SchemaMetadata(
+            source="empty",
+            generated="runtime",
+        ),
+        entities={},
+        duplicates={},
+    )

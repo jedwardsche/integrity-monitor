@@ -226,7 +226,7 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
   const goToPage = useCallback(
     async (page: number, totalPages?: number) => {
       if (page === currentPage || page < 1) return;
-      
+
       // Going to page 1
       if (page === 1) {
         cursorHistory.current = [null];
@@ -294,10 +294,10 @@ export function useFirestoreIssues(filters: IssueFilters = {}, pageSize: number 
   const goToLastPage = useCallback(
     async (totalPages: number) => {
       if (totalPages <= 1 || currentPage === totalPages) return;
-      
+
       setLoading(true);
       setError(null);
-      
+
       try {
         let cursor = lastDocRef.current;
         let currentP = currentPage;

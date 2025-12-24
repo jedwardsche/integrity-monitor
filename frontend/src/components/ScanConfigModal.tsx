@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { useRules } from "../hooks/useRules";
 import type { AirtableSchema, AirtableTable } from "../utils/airtable";
-import { RuleSelectionPanel } from "./RuleSelectionPanel";
 
 export interface ScanConfig {
   checks: {
@@ -59,7 +58,7 @@ export function ScanConfigModal({
   const [schema, setSchema] = useState<AirtableSchema | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(
-    new Set(Object.keys(ENTITY_TABLE_MAPPING))
+    new Set() // CRITICAL FIX: Start with NO entities selected - user must select manually
   );
   const [selectedRules, setSelectedRules] = useState<{
     duplicates?: Record<string, string[]>;
@@ -67,10 +66,23 @@ export function ScanConfigModal({
     required_fields?: Record<string, string[]>;
     attendance_rules?: boolean;
   }>({});
-  const [showRuleSelection, setShowRuleSelection] = useState(false);
+  const [expandedCheckTypes, setExpandedCheckTypes] = useState<Set<string>>(
+    new Set(["duplicates", "links", "required_fields", "attendance"])
+  );
   const { getToken } = useAuth();
-  const { loadRules, loading: rulesLoading } = useRules();
+  const { loadRules } = useRules();
   const [rules, setRules] = useState<any>(null);
+
+  // Reset state when modal closes to ensure clean slate on next open
+  useEffect(() => {
+    if (!isOpen) {
+      // Clear all selections when modal closes
+      setSelectedEntities(new Set());
+      setSelectedRules({});
+      setRules(null);
+      setSchema(null);
+    }
+  }, [isOpen]);
 
   // Load rules when modal opens
   useEffect(() => {
@@ -158,25 +170,9 @@ export function ScanConfigModal({
     return Array.from(entityTableMap.keys()).sort();
   }, [entityTableMap]);
 
-  // Initialize selected entities when schema loads
-  useEffect(() => {
-    if (
-      availableEntities.length > 0 &&
-      selectedEntities.size === Object.keys(ENTITY_TABLE_MAPPING).length
-    ) {
-      // Only auto-select all if we had all entities selected before
-      setSelectedEntities(new Set(availableEntities));
-    }
-  }, [availableEntities]);
-
-  if (!isOpen) return null;
-
-  const handleCheckChange = (checkName: keyof typeof checks) => {
-    setChecks((prev) => ({
-      ...prev,
-      [checkName]: !prev[checkName],
-    }));
-  };
+  // REMOVED: useEffect that auto-selected all entities when schema loaded
+  // This was causing ALL tables to be auto-selected, leading to unintended scans
+  // Users must now explicitly select tables and rules
 
   // Get all rule IDs for an entity in a category
   const getAllRuleIds = (
@@ -202,29 +198,187 @@ export function ScanConfigModal({
     return [];
   };
 
-  // Initialize rules for an entity (select all by default)
-  const initializeRulesForEntity = (entity: string) => {
+  // Check if all rules are selected for a check type across all entities
+  const areAllRulesSelectedForCheckType = (
+    checkType: "duplicates" | "links" | "required_fields" | "attendance"
+  ): boolean => {
+    if (checkType === "attendance") {
+      return selectedRules.attendance_rules === true;
+    }
+
+    const category =
+      checkType === "duplicates"
+        ? "duplicates"
+        : checkType === "links"
+        ? "relationships"
+        : "required_fields";
+
+    if (selectedEntities.size === 0) return false;
+    if (!rules) return false;
+
+    // Check if all entities have all their rules selected
+    const allSelected = Array.from(selectedEntities).every((entity) => {
+      const allIds = getAllRuleIds(category, entity);
+      if (allIds.length === 0) return true; // No rules means "all selected"
+      const selectedIds = selectedRules[category]?.[entity] || [];
+      return (
+        selectedIds.length === allIds.length &&
+        allIds.every((id) => selectedIds.includes(id))
+      );
+    });
+
+    return allSelected;
+  };
+
+  // Check if any rules are selected for a check type (for indeterminate state)
+  const areAnyRulesSelectedForCheckType = (
+    checkType: "duplicates" | "links" | "required_fields" | "attendance"
+  ): boolean => {
+    if (checkType === "attendance") {
+      return selectedRules.attendance_rules === true;
+    }
+
+    const category =
+      checkType === "duplicates"
+        ? "duplicates"
+        : checkType === "links"
+        ? "relationships"
+        : "required_fields";
+
+    if (selectedEntities.size === 0) return false;
+    if (!rules) return false;
+
+    // Check if any entity has any rules selected
+    return Array.from(selectedEntities).some((entity) => {
+      const selectedIds = selectedRules[category]?.[entity] || [];
+      return selectedIds.length > 0;
+    });
+  };
+
+  // Sync check type state with rule selection state
+  useEffect(() => {
     if (!rules) return;
 
+    setChecks((prev) => {
+      const next = { ...prev };
+      // Only update if we have entities selected, otherwise keep current state
+      if (selectedEntities.size > 0) {
+        next.duplicates = areAllRulesSelectedForCheckType("duplicates");
+        next.links = areAllRulesSelectedForCheckType("links");
+        next.required_fields =
+          areAllRulesSelectedForCheckType("required_fields");
+      }
+      next.attendance = areAllRulesSelectedForCheckType("attendance");
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRules, selectedEntities.size, rules]);
+
+  if (!isOpen) return null;
+
+  const toggleCheckType = (checkName: keyof typeof checks) => {
+    const allSelected = areAllRulesSelectedForCheckType(checkName);
+    const newValue = !allSelected;
+
+    // When toggling a check type, select/deselect all its rules
+    if (newValue) {
+      // Select all rules for this check type
+      if (checkName === "duplicates") {
+        selectedEntities.forEach((entity) => {
+          const ruleIds = getAllRuleIds("duplicates", entity);
+          if (ruleIds.length > 0) {
+            handleRulesChange("duplicates", entity, ruleIds);
+          }
+        });
+      } else if (checkName === "links") {
+        selectedEntities.forEach((entity) => {
+          const ruleIds = getAllRuleIds("relationships", entity);
+          if (ruleIds.length > 0) {
+            handleRulesChange("relationships", entity, ruleIds);
+          }
+        });
+      } else if (checkName === "required_fields") {
+        selectedEntities.forEach((entity) => {
+          const ruleIds = getAllRuleIds("required_fields", entity);
+          if (ruleIds.length > 0) {
+            handleRulesChange("required_fields", entity, ruleIds);
+          }
+        });
+      } else if (checkName === "attendance") {
+        handleRulesChange("attendance_rules", "", true);
+      }
+      // Update check state to enabled
+      setChecks((prev) => ({
+        ...prev,
+        [checkName]: true,
+      }));
+    } else {
+      // Deselect all rules for this check type
+      if (checkName === "duplicates") {
+        selectedEntities.forEach((entity) => {
+          handleRulesChange("duplicates", entity, []);
+        });
+      } else if (checkName === "links") {
+        selectedEntities.forEach((entity) => {
+          handleRulesChange("relationships", entity, []);
+        });
+      } else if (checkName === "required_fields") {
+        selectedEntities.forEach((entity) => {
+          handleRulesChange("required_fields", entity, []);
+        });
+      } else if (checkName === "attendance") {
+        handleRulesChange("attendance_rules", "", false);
+      }
+      // Update check state to disabled
+      setChecks((prev) => ({
+        ...prev,
+        [checkName]: false,
+      }));
+    }
+  };
+
+  const toggleCheckTypeExpansion = (checkType: string) => {
+    setExpandedCheckTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(checkType)) {
+        next.delete(checkType);
+      } else {
+        next.add(checkType);
+      }
+      return next;
+    });
+  };
+
+  // Initialize rules for an entity (DO NOT auto-select - user must select manually)
+  const initializeRulesForEntity = (entity: string) => {
+    // CRITICAL FIX: Do NOT automatically select all rules when an entity is selected
+    // The user must explicitly check the individual rules they want to run
+    // Previously this was auto-selecting ALL rules, causing scans to run unselected rules
+
+    // Just ensure the entity exists in selectedRules with empty arrays
     setSelectedRules((prev) => {
       const next = { ...prev };
 
-      // Duplicates
-      const dupIds = getAllRuleIds("duplicates", entity);
-      if (dupIds.length > 0) {
-        next.duplicates = { ...next.duplicates, [entity]: dupIds };
+      // Initialize with empty arrays so the UI works, but don't pre-select anything
+      if (!next.duplicates) {
+        next.duplicates = {};
+      }
+      if (!next.duplicates[entity]) {
+        next.duplicates[entity] = [];
       }
 
-      // Relationships
-      const relIds = getAllRuleIds("relationships", entity);
-      if (relIds.length > 0) {
-        next.relationships = { ...next.relationships, [entity]: relIds };
+      if (!next.relationships) {
+        next.relationships = {};
+      }
+      if (!next.relationships[entity]) {
+        next.relationships[entity] = [];
       }
 
-      // Required fields
-      const reqIds = getAllRuleIds("required_fields", entity);
-      if (reqIds.length > 0) {
-        next.required_fields = { ...next.required_fields, [entity]: reqIds };
+      if (!next.required_fields) {
+        next.required_fields = {};
+      }
+      if (!next.required_fields[entity]) {
+        next.required_fields[entity] = [];
       }
 
       return next;
@@ -293,27 +447,146 @@ export function ScanConfigModal({
     }
   };
 
+  const handleSelectAllCheckTypes = () => {
+    const allSelected =
+      areAllRulesSelectedForCheckType("duplicates") &&
+      areAllRulesSelectedForCheckType("links") &&
+      areAllRulesSelectedForCheckType("required_fields") &&
+      areAllRulesSelectedForCheckType("attendance");
+
+    if (allSelected) {
+      // Deselect all
+      toggleCheckType("duplicates");
+      toggleCheckType("links");
+      toggleCheckType("required_fields");
+      toggleCheckType("attendance");
+    } else {
+      // Select all
+      if (!areAllRulesSelectedForCheckType("duplicates")) {
+        toggleCheckType("duplicates");
+      }
+      if (!areAllRulesSelectedForCheckType("links")) {
+        toggleCheckType("links");
+      }
+      if (!areAllRulesSelectedForCheckType("required_fields")) {
+        toggleCheckType("required_fields");
+      }
+      if (!areAllRulesSelectedForCheckType("attendance")) {
+        toggleCheckType("attendance");
+      }
+    }
+  };
+
   const handleConfirm = () => {
+    // CRITICAL FIX: Determine what runs based ONLY on selectedRules, not the checks state
+    // This ensures scans only run the rules the user explicitly selected
+
+    // Check if we have any duplicate rules selected (any entity with rules)
+    const hasDuplicateRules = Boolean(
+      selectedRules.duplicates &&
+        Object.values(selectedRules.duplicates).some(
+          (ruleIds) => ruleIds.length > 0
+        )
+    );
+
+    // Check if we have any relationship rules selected
+    const hasRelationshipRules = Boolean(
+      selectedRules.relationships &&
+        Object.values(selectedRules.relationships).some(
+          (ruleIds) => ruleIds.length > 0
+        )
+    );
+
+    // Check if we have any required field rules selected
+    const hasRequiredFieldRules = Boolean(
+      selectedRules.required_fields &&
+        Object.values(selectedRules.required_fields).some(
+          (ruleIds) => ruleIds.length > 0
+        )
+    );
+
+    // Check if attendance rules are selected
+    const hasAttendanceRules = selectedRules.attendance_rules === true;
+
+    // Build effectiveChecks based ONLY on what rules are actually selected
+    const effectiveChecks = {
+      duplicates: hasDuplicateRules,
+      links: hasRelationshipRules,
+      required_fields: hasRequiredFieldRules,
+      attendance: hasAttendanceRules,
+    };
+
     // Only include rules if at least one category has selections
     const hasRules =
-      (selectedRules.duplicates &&
-        Object.keys(selectedRules.duplicates).length > 0) ||
-      (selectedRules.relationships &&
-        Object.keys(selectedRules.relationships).length > 0) ||
-      (selectedRules.required_fields &&
-        Object.keys(selectedRules.required_fields).length > 0) ||
-      selectedRules.attendance_rules !== undefined;
+      hasDuplicateRules ||
+      hasRelationshipRules ||
+      hasRequiredFieldRules ||
+      hasAttendanceRules;
 
     onConfirm({
-      checks,
+      checks: effectiveChecks,
       entities:
         selectedEntities.size > 0 ? Array.from(selectedEntities) : undefined,
       rules: hasRules ? selectedRules : undefined,
     });
   };
 
-  const hasAtLeastOneCheck = Object.values(checks).some((v) => v);
+  // Check if at least one rule is selected (not all rules, just at least one)
+  const hasAtLeastOneCheck = (() => {
+    if (selectedRules.attendance_rules === true) return true;
+
+    // Check if any entity has any rules selected for any category
+    if (selectedRules.duplicates) {
+      for (const entity in selectedRules.duplicates) {
+        if (selectedRules.duplicates[entity].length > 0) return true;
+      }
+    }
+    if (selectedRules.relationships) {
+      for (const entity in selectedRules.relationships) {
+        if (selectedRules.relationships[entity].length > 0) return true;
+      }
+    }
+    if (selectedRules.required_fields) {
+      for (const entity in selectedRules.required_fields) {
+        if (selectedRules.required_fields[entity].length > 0) return true;
+      }
+    }
+    return false;
+  })();
   const hasAtLeastOneEntity = selectedEntities.size > 0;
+
+  // Count total number of selected rules
+  const totalRuleCount = (() => {
+    let count = 0;
+
+    // Count attendance rules (1 if enabled, 0 if not)
+    if (selectedRules.attendance_rules === true) {
+      count += 1;
+    }
+
+    // Count duplicate rules
+    if (selectedRules.duplicates) {
+      for (const entity in selectedRules.duplicates) {
+        count += selectedRules.duplicates[entity].length;
+      }
+    }
+
+    // Count relationship rules
+    if (selectedRules.relationships) {
+      for (const entity in selectedRules.relationships) {
+        count += selectedRules.relationships[entity].length;
+      }
+    }
+
+    // Count required field rules
+    if (selectedRules.required_fields) {
+      for (const entity in selectedRules.required_fields) {
+        count += selectedRules.required_fields[entity].length;
+      }
+    }
+
+    return count;
+  })();
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-0">
@@ -332,88 +605,7 @@ export function ScanConfigModal({
         </h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Left Column */}
-          <div className="space-y-6">
-            {/* Check Types Selection */}
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-main)] mb-3">
-                Check Types
-              </label>
-              <div className="space-y-2">
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={checks.duplicates}
-                    onChange={() => handleCheckChange("duplicates")}
-                    className="mr-3"
-                  />
-                  <div className="flex-1">
-                    <div className="font-medium text-[var(--text-main)]">
-                      Duplicates
-                    </div>
-                    <div className="text-sm text-[var(--text-muted)]">
-                      Detect duplicate records across entities
-                    </div>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={checks.links}
-                    onChange={() => handleCheckChange("links")}
-                    className="mr-3"
-                  />
-                  <div className="flex-1">
-                    <div className="font-medium text-[var(--text-main)]">
-                      Missing Links
-                    </div>
-                    <div className="text-sm text-[var(--text-muted)]">
-                      Verify required relationships between records
-                    </div>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={checks.required_fields}
-                    onChange={() => handleCheckChange("required_fields")}
-                    className="mr-3"
-                  />
-                  <div className="flex-1">
-                    <div className="font-medium text-[var(--text-main)]">
-                      Missing Fields
-                    </div>
-                    <div className="text-sm text-[var(--text-muted)]">
-                      Check for required field values
-                    </div>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-mid)] transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={checks.attendance}
-                    onChange={() => handleCheckChange("attendance")}
-                    className="mr-3"
-                  />
-                  <div className="flex-1">
-                    <div className="font-medium text-[var(--text-main)]">
-                      Attendance Anomalies
-                    </div>
-                    <div className="text-sm text-[var(--text-muted)]">
-                      Detect attendance pattern issues
-                    </div>
-                  </div>
-                </label>
-              </div>
-              {!hasAtLeastOneCheck && (
-                <p className="mt-2 text-sm text-red-600">
-                  Please select at least one check type
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column */}
+          {/* Left Column - Table/Entity Selection */}
           <div>
             {/* Table/Entity Selection */}
             <div>
@@ -443,7 +635,7 @@ export function ScanConfigModal({
                   No tables found. Please check your schema configuration.
                 </div>
               ) : (
-                <div className="max-h-64 overflow-y-auto space-y-2 border border-[var(--border)] rounded-lg p-3">
+                <div className="max-h-[600px] overflow-y-auto space-y-2 border border-[var(--border)] rounded-lg p-3">
                   {availableEntities.map((entity) => {
                     const table = entityTableMap.get(entity);
                     return (
@@ -477,40 +669,435 @@ export function ScanConfigModal({
                 </p>
               )}
             </div>
+          </div>
 
-            {/* Rule Selection Section */}
-            {selectedEntities.size > 0 && rules && (
-              <div className="mt-6">
-                <div className="flex items-center justify-between mb-3">
-                  <label className="block text-sm font-medium text-[var(--text-main)]">
-                    Rule Selection
-                  </label>
+          {/* Right Column - Check Types with Nested Rules */}
+          <div className="space-y-6">
+            {/* Check Types with Nested Rules */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-[var(--text-main)]">
+                  Check Types & Rules
+                </label>
+                {selectedEntities.size > 0 && rules && (
                   <button
-                    type="button"
-                    onClick={() => setShowRuleSelection(!showRuleSelection)}
+                    onClick={handleSelectAllCheckTypes}
                     className="text-sm text-[var(--brand)] hover:underline"
+                    type="button"
                   >
-                    {showRuleSelection ? "Hide" : "Show"} Rules
+                    {areAllRulesSelectedForCheckType("duplicates") &&
+                    areAllRulesSelectedForCheckType("links") &&
+                    areAllRulesSelectedForCheckType("required_fields") &&
+                    areAllRulesSelectedForCheckType("attendance")
+                      ? "Deselect All"
+                      : "Select All"}
                   </button>
-                </div>
-                {showRuleSelection && (
-                  <div className="space-y-3 max-h-96 overflow-y-auto border border-[var(--border)] rounded-lg p-3">
-                    {Array.from(selectedEntities).map((entity) => (
-                      <RuleSelectionPanel
-                        key={entity}
-                        entity={entity}
-                        rules={rules}
-                        selectedRules={selectedRules}
-                        onRulesChange={handleRulesChange}
-                        entityDisplayName={
-                          ENTITY_TABLE_MAPPING[entity] || entity
+                )}
+              </div>
+              <div className="space-y-3 max-h-[600px] overflow-y-auto">
+                {/* Duplicates Check Type */}
+                <div className="border border-[var(--border)] rounded-lg">
+                  <div className="flex items-center p-3 hover:bg-[var(--bg-mid)]/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={areAllRulesSelectedForCheckType("duplicates")}
+                      ref={(el) => {
+                        if (el) {
+                          el.indeterminate =
+                            areAnyRulesSelectedForCheckType("duplicates") &&
+                            !areAllRulesSelectedForCheckType("duplicates");
                         }
-                      />
-                    ))}
-                    {/* Attendance rules (not per-entity) */}
-                    {checks.attendance && rules.attendance_rules && (
-                      <div className="border border-[var(--border)] rounded-lg p-3 bg-[var(--bg-mid)]/30">
-                        <label className="flex items-center gap-2 cursor-pointer">
+                      }}
+                      onChange={() => toggleCheckType("duplicates")}
+                      className="mr-3 w-4 h-4"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-[var(--text-main)]">
+                        Duplicates
+                      </div>
+                      <div className="text-sm text-[var(--text-muted)]">
+                        Detect duplicate records across entities
+                      </div>
+                    </div>
+                    {selectedEntities.size > 0 && rules && (
+                      <button
+                        type="button"
+                        onClick={() => toggleCheckTypeExpansion("duplicates")}
+                        className="ml-2 px-2 py-1 text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-mid)]/30 rounded transition-colors"
+                        aria-label={
+                          expandedCheckTypes.has("duplicates")
+                            ? "Collapse rules"
+                            : "Expand rules"
+                        }
+                      >
+                        {expandedCheckTypes.has("duplicates") ? "▼" : "▶"}
+                      </button>
+                    )}
+                  </div>
+                  {expandedCheckTypes.has("duplicates") &&
+                    selectedEntities.size > 0 &&
+                    rules && (
+                      <div className="px-3 pb-3 pt-2 space-y-3 border-t border-[var(--border)] bg-[var(--bg-mid)]/20">
+                        {Array.from(selectedEntities).map((entity) => {
+                          const dupDef = rules.duplicates?.[entity] as
+                            | { likely?: any[]; possible?: any[] }
+                            | undefined;
+                          if (!dupDef) return null;
+
+                          const likelyRules = dupDef.likely || [];
+                          const possibleRules = dupDef.possible || [];
+                          const allRuleIds = getAllRuleIds(
+                            "duplicates",
+                            entity
+                          );
+                          const selectedIds =
+                            selectedRules.duplicates?.[entity] || [];
+
+                          if (allRuleIds.length === 0) return null;
+
+                          return (
+                            <div
+                              key={entity}
+                              className="ml-2 space-y-2 border-l-2 border-[var(--border)]/50 pl-3"
+                            >
+                              <div className="text-xs font-semibold text-[var(--text-main)] uppercase tracking-wide">
+                                {ENTITY_TABLE_MAPPING[entity] || entity}
+                              </div>
+                              {likelyRules.length > 0 && (
+                                <div className="ml-1 space-y-1">
+                                  <div className="text-xs font-medium text-[var(--text-muted)] mb-1.5">
+                                    Likely
+                                  </div>
+                                  {likelyRules.map((rule: any) => (
+                                    <label
+                                      key={rule.rule_id}
+                                      className="flex items-center gap-2 p-2 rounded-md hover:bg-[var(--bg-mid)]/40 cursor-pointer transition-colors"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedIds.includes(
+                                          rule.rule_id
+                                        )}
+                                        onChange={() =>
+                                          handleRulesChange(
+                                            "duplicates",
+                                            entity,
+                                            selectedIds.includes(rule.rule_id)
+                                              ? selectedIds.filter(
+                                                  (id) => id !== rule.rule_id
+                                                )
+                                              : [...selectedIds, rule.rule_id]
+                                          )
+                                        }
+                                        className="w-3.5 h-3.5"
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-xs font-medium text-[var(--text-main)]">
+                                          {rule.rule_id}
+                                        </div>
+                                        <div className="text-xs text-[var(--text-muted)] truncate">
+                                          {rule.description || ""}
+                                        </div>
+                                      </div>
+                                    </label>
+                                  ))}
+                                </div>
+                              )}
+                              {possibleRules.length > 0 && (
+                                <div className="ml-1 mt-3 space-y-1">
+                                  <div className="text-xs font-medium text-[var(--text-muted)] mb-1.5">
+                                    Possible
+                                  </div>
+                                  {possibleRules.map((rule: any) => (
+                                    <label
+                                      key={rule.rule_id}
+                                      className="flex items-center gap-2 p-2 rounded-md hover:bg-[var(--bg-mid)]/40 cursor-pointer transition-colors"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedIds.includes(
+                                          rule.rule_id
+                                        )}
+                                        onChange={() =>
+                                          handleRulesChange(
+                                            "duplicates",
+                                            entity,
+                                            selectedIds.includes(rule.rule_id)
+                                              ? selectedIds.filter(
+                                                  (id) => id !== rule.rule_id
+                                                )
+                                              : [...selectedIds, rule.rule_id]
+                                          )
+                                        }
+                                        className="w-3.5 h-3.5"
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-xs font-medium text-[var(--text-main)]">
+                                          {rule.rule_id}
+                                        </div>
+                                        <div className="text-xs text-[var(--text-muted)] truncate">
+                                          {rule.description || ""}
+                                        </div>
+                                      </div>
+                                    </label>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                </div>
+
+                {/* Missing Links Check Type */}
+                <div className="border border-[var(--border)] rounded-lg">
+                  <div className="flex items-center p-3 hover:bg-[var(--bg-mid)]/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={areAllRulesSelectedForCheckType("links")}
+                      ref={(el) => {
+                        if (el) {
+                          el.indeterminate =
+                            areAnyRulesSelectedForCheckType("links") &&
+                            !areAllRulesSelectedForCheckType("links");
+                        }
+                      }}
+                      onChange={() => toggleCheckType("links")}
+                      className="mr-3 w-4 h-4"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-[var(--text-main)]">
+                        Missing Links
+                      </div>
+                      <div className="text-sm text-[var(--text-muted)]">
+                        Verify required relationships between records
+                      </div>
+                    </div>
+                    {selectedEntities.size > 0 && rules && (
+                      <button
+                        type="button"
+                        onClick={() => toggleCheckTypeExpansion("links")}
+                        className="ml-2 px-2 py-1 text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-mid)]/30 rounded transition-colors"
+                        aria-label={
+                          expandedCheckTypes.has("links")
+                            ? "Collapse rules"
+                            : "Expand rules"
+                        }
+                      >
+                        {expandedCheckTypes.has("links") ? "▼" : "▶"}
+                      </button>
+                    )}
+                  </div>
+                  {expandedCheckTypes.has("links") &&
+                    selectedEntities.size > 0 &&
+                    rules && (
+                      <div className="px-3 pb-3 pt-2 space-y-3 border-t border-[var(--border)] bg-[var(--bg-mid)]/20">
+                        {Array.from(selectedEntities).map((entity) => {
+                          const relRules = rules.relationships?.[entity];
+                          if (!relRules || Object.keys(relRules).length === 0)
+                            return null;
+
+                          const selectedIds =
+                            selectedRules.relationships?.[entity] || [];
+
+                          return (
+                            <div
+                              key={entity}
+                              className="ml-2 space-y-2 border-l-2 border-[var(--border)]/50 pl-3"
+                            >
+                              <div className="text-xs font-semibold text-[var(--text-main)] uppercase tracking-wide">
+                                {ENTITY_TABLE_MAPPING[entity] || entity}
+                              </div>
+                              {Object.entries(relRules).map(
+                                ([relKey, relRule]: [string, any]) => (
+                                  <label
+                                    key={relKey}
+                                    className="flex items-center gap-2 p-2 rounded-md hover:bg-[var(--bg-mid)]/40 cursor-pointer transition-colors"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedIds.includes(relKey)}
+                                      onChange={() =>
+                                        handleRulesChange(
+                                          "relationships",
+                                          entity,
+                                          selectedIds.includes(relKey)
+                                            ? selectedIds.filter(
+                                                (id) => id !== relKey
+                                              )
+                                            : [...selectedIds, relKey]
+                                        )
+                                      }
+                                      className="w-3.5 h-3.5"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-xs font-medium text-[var(--text-main)]">
+                                        {relKey}
+                                      </div>
+                                      <div className="text-xs text-[var(--text-muted)] truncate">
+                                        {relRule.message || ""}
+                                      </div>
+                                    </div>
+                                  </label>
+                                )
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                </div>
+
+                {/* Missing Fields Check Type */}
+                <div className="border border-[var(--border)] rounded-lg">
+                  <div className="flex items-center p-3 hover:bg-[var(--bg-mid)]/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={areAllRulesSelectedForCheckType(
+                        "required_fields"
+                      )}
+                      ref={(el) => {
+                        if (el) {
+                          el.indeterminate =
+                            areAnyRulesSelectedForCheckType(
+                              "required_fields"
+                            ) &&
+                            !areAllRulesSelectedForCheckType("required_fields");
+                        }
+                      }}
+                      onChange={() => toggleCheckType("required_fields")}
+                      className="mr-3 w-4 h-4"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-[var(--text-main)]">
+                        Missing Fields
+                      </div>
+                      <div className="text-sm text-[var(--text-muted)]">
+                        Check for required field values
+                      </div>
+                    </div>
+                    {selectedEntities.size > 0 && rules && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          toggleCheckTypeExpansion("required_fields")
+                        }
+                        className="ml-2 px-2 py-1 text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-mid)]/30 rounded transition-colors"
+                        aria-label={
+                          expandedCheckTypes.has("required_fields")
+                            ? "Collapse rules"
+                            : "Expand rules"
+                        }
+                      >
+                        {expandedCheckTypes.has("required_fields") ? "▼" : "▶"}
+                      </button>
+                    )}
+                  </div>
+                  {expandedCheckTypes.has("required_fields") &&
+                    selectedEntities.size > 0 &&
+                    rules && (
+                      <div className="px-3 pb-3 pt-2 space-y-3 border-t border-[var(--border)] bg-[var(--bg-mid)]/20">
+                        {Array.from(selectedEntities).map((entity) => {
+                          const reqFields = rules.required_fields?.[entity];
+                          if (
+                            !reqFields ||
+                            !Array.isArray(reqFields) ||
+                            reqFields.length === 0
+                          )
+                            return null;
+
+                          const selectedIds =
+                            selectedRules.required_fields?.[entity] || [];
+
+                          return (
+                            <div
+                              key={entity}
+                              className="ml-2 space-y-2 border-l-2 border-[var(--border)]/50 pl-3"
+                            >
+                              <div className="text-xs font-semibold text-[var(--text-main)] uppercase tracking-wide">
+                                {ENTITY_TABLE_MAPPING[entity] || entity}
+                              </div>
+                              {reqFields.map((field: any) => {
+                                const ruleId =
+                                  field.rule_id ||
+                                  field.field ||
+                                  `required.${entity}.${field.field}`;
+                                return (
+                                  <label
+                                    key={ruleId}
+                                    className="flex items-center gap-2 p-2 rounded-md hover:bg-[var(--bg-mid)]/40 cursor-pointer transition-colors"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedIds.includes(ruleId)}
+                                      onChange={() =>
+                                        handleRulesChange(
+                                          "required_fields",
+                                          entity,
+                                          selectedIds.includes(ruleId)
+                                            ? selectedIds.filter(
+                                                (id) => id !== ruleId
+                                              )
+                                            : [...selectedIds, ruleId]
+                                        )
+                                      }
+                                      className="w-3.5 h-3.5"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-xs font-medium text-[var(--text-main)]">
+                                        {field.field || ruleId}
+                                      </div>
+                                      <div className="text-xs text-[var(--text-muted)] truncate">
+                                        {field.message || ""}
+                                      </div>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                </div>
+
+                {/* Attendance Anomalies Check Type */}
+                <div className="border border-[var(--border)] rounded-lg">
+                  <div className="flex items-center p-3 hover:bg-[var(--bg-mid)]/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={areAllRulesSelectedForCheckType("attendance")}
+                      onChange={() => toggleCheckType("attendance")}
+                      className="mr-3 w-4 h-4"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-[var(--text-main)]">
+                        Attendance Anomalies
+                      </div>
+                      <div className="text-sm text-[var(--text-muted)]">
+                        Detect attendance pattern issues
+                      </div>
+                    </div>
+                    {rules?.attendance_rules && (
+                      <button
+                        type="button"
+                        onClick={() => toggleCheckTypeExpansion("attendance")}
+                        className="ml-2 px-2 py-1 text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-mid)]/30 rounded transition-colors"
+                        aria-label={
+                          expandedCheckTypes.has("attendance")
+                            ? "Collapse rules"
+                            : "Expand rules"
+                        }
+                      >
+                        {expandedCheckTypes.has("attendance") ? "▼" : "▶"}
+                      </button>
+                    )}
+                  </div>
+                  {expandedCheckTypes.has("attendance") &&
+                    rules?.attendance_rules && (
+                      <div className="px-3 pb-3 pt-2 border-t border-[var(--border)] bg-[var(--bg-mid)]/20">
+                        <label className="flex items-center gap-2 p-2 rounded-md hover:bg-[var(--bg-mid)]/40 cursor-pointer transition-colors">
                           <input
                             type="checkbox"
                             checked={selectedRules.attendance_rules ?? true}
@@ -521,7 +1108,7 @@ export function ScanConfigModal({
                                 e.target.checked
                               )
                             }
-                            className="w-4 h-4"
+                            className="w-3.5 h-3.5"
                           />
                           <span className="text-sm font-medium text-[var(--text-main)]">
                             Attendance Rules
@@ -529,9 +1116,30 @@ export function ScanConfigModal({
                         </label>
                       </div>
                     )}
-                  </div>
-                )}
+                </div>
               </div>
+              {!hasAtLeastOneCheck && (
+                <p className="mt-2 text-sm text-red-600">
+                  Please select at least one check type
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Rule Count */}
+        <div className="mt-6 pt-4 border-t border-[var(--border)]">
+          <div className="text-sm text-[var(--text-muted)] text-center">
+            {totalRuleCount === 0 ? (
+              "No rules selected"
+            ) : (
+              <>
+                <span className="font-medium text-[var(--text-main)]">
+                  {totalRuleCount}
+                </span>{" "}
+                {totalRuleCount === 1 ? "rule" : "rules"} will be used for this
+                scan
+              </>
             )}
           </div>
         </div>

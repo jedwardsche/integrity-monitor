@@ -189,6 +189,21 @@ export default function App({ children }: AppProps) {
       ).catch(() => {});
       // #endregion agent log
 
+      // Build run_config with entities and rules
+      const runConfig: any = {};
+      if (config.entities && config.entities.length > 0) {
+        runConfig.entities = config.entities;
+      }
+      if (config.rules) {
+        runConfig.rules = config.rules;
+      }
+
+      // Build request body
+      const requestBody: any = {};
+      if (Object.keys(runConfig).length > 0) {
+        requestBody.run_config = runConfig;
+      }
+
       const response = await fetch(
         `${API_BASE}/integrity/run?${params.toString()}`,
         {
@@ -197,6 +212,10 @@ export default function App({ children }: AppProps) {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
+          body:
+            Object.keys(requestBody).length > 0
+              ? JSON.stringify(requestBody)
+              : undefined,
         }
       ).catch((error) => {
         // #region agent log

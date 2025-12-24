@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useRules } from "../hooks/useRules";
 import type { RulesByCategory } from "../hooks/useRules";
 import { useAuth } from "../hooks/useAuth";
@@ -35,11 +35,13 @@ interface EntityRules {
 
 export function RulesPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const { loadRules, createRule, updateRule, deleteRule, loading, error } =
     useRules();
   const [rules, setRules] = useState<RulesByCategory | null>(null);
-  const [activeEntity, setActiveEntity] = useState<EntityName>("students");
+  const entityFromUrl = searchParams.get("entity") || "students";
+  const [activeEntity, setActiveEntity] = useState<EntityName>(entityFromUrl);
   const [showAICreator, setShowAICreator] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
   const [editingRule, setEditingRule] = useState<{
@@ -53,6 +55,10 @@ export function RulesPage() {
     entity?: string;
     ruleId: string;
   } | null>(null);
+  const entityTabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [highlightedEntity, setHighlightedEntity] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     // Only fetch rules if user is authenticated
@@ -60,6 +66,38 @@ export function RulesPage() {
       fetchRules();
     }
   }, [user]);
+
+  // Handle entity from URL parameter
+  useEffect(() => {
+    const entityParam = searchParams.get("entity");
+    if (entityParam) {
+      // Only update if different from current active entity
+      if (entityParam !== activeEntity) {
+        setActiveEntity(entityParam);
+      }
+      // Highlight the entity tab
+      setHighlightedEntity(entityParam);
+      // Scroll to the entity tab if it exists
+      setTimeout(() => {
+        const tabRef = entityTabRefs.current[entityParam];
+        if (tabRef) {
+          tabRef.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+            inline: "center",
+          });
+        }
+      }, 100);
+      // Remove highlight after 3 seconds
+      setTimeout(() => {
+        setHighlightedEntity(null);
+        // Remove query parameter after highlighting
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete("entity");
+        setSearchParams(newParams, { replace: true });
+      }, 3000);
+    }
+  }, [searchParams, activeEntity, setSearchParams]);
 
   const fetchRules = async () => {
     try {
@@ -104,18 +142,9 @@ export function RulesPage() {
 
     try {
       if (editingRule.ruleId) {
-        await updateRule(
-          category,
-          editingRule.ruleId,
-          entity,
-          ruleData
-        );
+        await updateRule(category, editingRule.ruleId, entity, ruleData);
       } else {
-        await createRule(
-          category,
-          entity,
-          ruleData
-        );
+        await createRule(category, entity, ruleData);
       }
       await fetchRules();
       setShowEditor(false);
@@ -156,6 +185,9 @@ export function RulesPage() {
       setDeletingRule(null);
     } catch (err) {
       console.error("Failed to delete rule:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to delete rule";
+      alert(`Failed to delete rule: ${errorMessage}`);
       setDeletingRule(null);
     }
   };
@@ -238,24 +270,37 @@ export function RulesPage() {
                   Likely Duplicates
                 </h4>
                 <div className="space-y-3">
-                  {entityRules.duplicates.likely.map((rule: any, idx: number) => (
-                    <RuleCard
-                      key={idx}
-                      rule={rule}
-                      entity={activeEntity}
-                      category="duplicates"
-                      ruleId={rule.rule_id}
-                      onView={() =>
-                        navigate(`/rules/duplicates/${activeEntity}/${rule.rule_id}`)
-                      }
-                      onEdit={() =>
-                        handleEditClick("duplicates", activeEntity, rule.rule_id, rule)
-                      }
-                      onDelete={() =>
-                        handleDeleteClick("duplicates", activeEntity, rule.rule_id)
-                      }
-                    />
-                  ))}
+                  {entityRules.duplicates.likely.map(
+                    (rule: any, idx: number) => (
+                      <RuleCard
+                        key={idx}
+                        rule={rule}
+                        entity={activeEntity}
+                        category="duplicates"
+                        ruleId={rule.rule_id}
+                        onView={() =>
+                          navigate(
+                            `/rules/duplicates/${activeEntity}/${rule.rule_id}`
+                          )
+                        }
+                        onEdit={() =>
+                          handleEditClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id,
+                            rule
+                          )
+                        }
+                        onDelete={() =>
+                          handleDeleteClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id
+                          )
+                        }
+                      />
+                    )
+                  )}
                 </div>
               </div>
             )}
@@ -266,24 +311,37 @@ export function RulesPage() {
                   Possible Duplicates
                 </h4>
                 <div className="space-y-3">
-                  {entityRules.duplicates.possible.map((rule: any, idx: number) => (
-                    <RuleCard
-                      key={idx}
-                      rule={rule}
-                      entity={activeEntity}
-                      category="duplicates"
-                      ruleId={rule.rule_id}
-                      onView={() =>
-                        navigate(`/rules/duplicates/${activeEntity}/${rule.rule_id}`)
-                      }
-                      onEdit={() =>
-                        handleEditClick("duplicates", activeEntity, rule.rule_id, rule)
-                      }
-                      onDelete={() =>
-                        handleDeleteClick("duplicates", activeEntity, rule.rule_id)
-                      }
-                    />
-                  ))}
+                  {entityRules.duplicates.possible.map(
+                    (rule: any, idx: number) => (
+                      <RuleCard
+                        key={idx}
+                        rule={rule}
+                        entity={activeEntity}
+                        category="duplicates"
+                        ruleId={rule.rule_id}
+                        onView={() =>
+                          navigate(
+                            `/rules/duplicates/${activeEntity}/${rule.rule_id}`
+                          )
+                        }
+                        onEdit={() =>
+                          handleEditClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id,
+                            rule
+                          )
+                        }
+                        onDelete={() =>
+                          handleDeleteClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id
+                          )
+                        }
+                      />
+                    )
+                  )}
                 </div>
               </div>
             )}
@@ -325,7 +383,12 @@ export function RulesPage() {
                       navigate(`/rules/relationships/${activeEntity}/${relKey}`)
                     }
                     onEdit={() =>
-                      handleEditClick("relationships", activeEntity, relKey, relRule)
+                      handleEditClick(
+                        "relationships",
+                        activeEntity,
+                        relKey,
+                        relRule
+                      )
                     }
                     onDelete={() =>
                       handleDeleteClick("relationships", activeEntity, relKey)
@@ -360,37 +423,55 @@ export function RulesPage() {
               </button>
             </div>
             <div className="space-y-3">
-              {entityRules.required_fields.map((fieldRule: any, idx: number) => (
-                <RuleCard
-                  key={idx}
-                  rule={fieldRule}
-                  entity={activeEntity}
-                  category="required_fields"
-                  ruleId={fieldRule.field || fieldRule.rule_id}
-                  onView={() =>
-                    navigate(
-                      `/rules/required_fields/${activeEntity}/${
-                        fieldRule.field || fieldRule.rule_id
-                      }`
-                    )
-                  }
-                  onEdit={() =>
-                    handleEditClick(
-                      "required_fields",
-                      activeEntity,
-                      fieldRule.field || fieldRule.rule_id,
+              {entityRules.required_fields.map(
+                (fieldRule: any, idx: number) => {
+                  // For required_fields, the rule_id might be missing, so use document ID or generate from field
+                  // The document ID in Firestore is typically {entity}_{field}
+                  const ruleId =
+                    fieldRule.rule_id ||
+                    (fieldRule.field
+                      ? `${activeEntity}_${fieldRule.field}`
+                      : undefined);
+
+                  if (!ruleId) {
+                    console.warn(
+                      "Required field rule missing rule_id and field:",
                       fieldRule
-                    )
+                    );
+                    return null;
                   }
-                  onDelete={() =>
-                    handleDeleteClick(
-                      "required_fields",
-                      activeEntity,
-                      fieldRule.field || fieldRule.rule_id
-                    )
-                  }
-                />
-              ))}
+
+                  return (
+                    <RuleCard
+                      key={idx}
+                      rule={fieldRule}
+                      entity={activeEntity}
+                      category="required_fields"
+                      ruleId={ruleId}
+                      onView={() =>
+                        navigate(
+                          `/rules/required_fields/${activeEntity}/${ruleId}`
+                        )
+                      }
+                      onEdit={() =>
+                        handleEditClick(
+                          "required_fields",
+                          activeEntity,
+                          ruleId,
+                          fieldRule
+                        )
+                      }
+                      onDelete={() =>
+                        handleDeleteClick(
+                          "required_fields",
+                          activeEntity,
+                          ruleId
+                        )
+                      }
+                    />
+                  );
+                }
+              )}
             </div>
           </div>
         )}
@@ -446,19 +527,30 @@ export function RulesPage() {
 
       {/* Entity/Table Tabs */}
       <div className="flex gap-2 border-b border-[var(--border)] overflow-x-auto">
-        {entities.map((entity) => (
-          <button
-            key={entity}
-            onClick={() => setActiveEntity(entity)}
-            className={`px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-              activeEntity === entity
-                ? "text-[var(--cta-blue)] border-b-2 border-[var(--cta-blue)]"
-                : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
-            }`}
-          >
-            {ENTITY_DISPLAY_NAMES[entity] || entity}
-          </button>
-        ))}
+        {entities.map((entity) => {
+          const isHighlighted = highlightedEntity === entity;
+          const isActive = activeEntity === entity;
+          return (
+            <button
+              key={entity}
+              ref={(el) => {
+                entityTabRefs.current[entity] = el;
+              }}
+              onClick={() => setActiveEntity(entity)}
+              className={`px-4 py-2 text-sm font-medium transition-all whitespace-nowrap ${
+                isActive
+                  ? "text-[var(--cta-blue)] border-b-2 border-[var(--cta-blue)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+              } ${
+                isHighlighted
+                  ? "bg-[var(--cta-blue)]/10 ring-2 ring-[var(--cta-blue)] ring-offset-2 rounded-t-lg"
+                  : ""
+              }`}
+            >
+              {ENTITY_DISPLAY_NAMES[entity] || entity}
+            </button>
+          );
+        })}
       </div>
 
       {/* Rules Content */}

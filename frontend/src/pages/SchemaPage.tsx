@@ -78,7 +78,7 @@ async function fetchJson<T>(path: string, token?: string): Promise<T> {
       message && message.trim().startsWith("<")
         ? `Expected JSON but received HTML from ${url}. This usually means:\n1. VITE_API_BASE is not set correctly in production (should point to Cloud Run backend URL)\n2. The backend is not running or not accessible\n3. Firebase Hosting is serving the SPA instead of proxying to the backend\n\nCurrent API_BASE: ${API_BASE}\nVITE_API_BASE env: ${
             import.meta.env.VITE_API_BASE || "not set"
-          }`
+          }\n\nTo fix: Rebuild the frontend using frontend/build-with-secrets.sh which will set VITE_API_BASE to the correct Cloud Run URL.`
         : message || `Request failed (${response.status}) for ${url}`;
     throw new Error(errorMessage);
   }

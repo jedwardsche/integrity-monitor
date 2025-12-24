@@ -123,9 +123,9 @@ class RulesService:
                 fields = []
                 for doc in docs:
                     rule_data = doc.to_dict()
-                    # Add the document ID as rule_id if not present
-                    if "rule_id" not in rule_data:
-                        rule_data["rule_id"] = doc.id
+                    # Always use document ID as rule_id to ensure consistency
+                    # This ensures deletion works correctly
+                    rule_data["rule_id"] = doc.id
                     fields.append(rule_data)
 
                 if fields:

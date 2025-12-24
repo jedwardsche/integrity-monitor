@@ -946,12 +946,15 @@ class IntegrityRunner:
     ) -> SchemaConfig:
         """Filter SchemaConfig based on selected rules in run_config.
         
+        Validates that selected rule IDs exist in the current schema and logs
+        warnings for any missing rules.
+        
         Args:
             schema_config: Original SchemaConfig
             run_config: Run configuration with optional rules selection
             
         Returns:
-            Filtered SchemaConfig with only selected rules
+            Filtered SchemaConfig with only selected rules that exist
         """
         if not run_config or not run_config.get("rules"):
             # No rule filtering requested, return original
@@ -963,49 +966,160 @@ class IntegrityRunner:
         from copy import deepcopy
         filtered_config = deepcopy(schema_config)
         
+        # Track missing rules for logging
+        missing_rules = []
+        
         # Filter duplicates
-        if "duplicates" in rules_selection and rules_selection["duplicates"]:
-            selected_dup = rules_selection["duplicates"]
-            for entity, rule_ids in selected_dup.items():
-                if entity in filtered_config.duplicates:
+        # If duplicates key exists in selection, filter based on selection
+        # If it doesn't exist, clear ALL duplicate rules (user didn't select any)
+        if "duplicates" in rules_selection:
+            selected_dup = rules_selection.get("duplicates", {})
+            if selected_dup:
+                # User selected specific duplicate rules
+                for entity, rule_ids in selected_dup.items():
+                    if entity not in filtered_config.duplicates:
+                        missing_rules.extend([
+                            f"duplicates.{entity}.{rule_id}" 
+                            for rule_id in rule_ids
+                        ])
+                        continue
+                        
                     dup_def = filtered_config.duplicates[entity]
+                    # Get all existing rule IDs for validation
+                    existing_rule_ids = {
+                        rule.rule_id for rule in (dup_def.likely or []) + (dup_def.possible or [])
+                    }
+                    
+                    # Check for missing rule IDs
+                    for rule_id in rule_ids:
+                        if rule_id not in existing_rule_ids:
+                            missing_rules.append(f"duplicates.{entity}.{rule_id}")
+                    
                     # Filter likely rules
                     dup_def.likely = [
-                        rule for rule in dup_def.likely
+                        rule for rule in (dup_def.likely or [])
                         if rule.rule_id in rule_ids
                     ]
                     # Filter possible rules
                     dup_def.possible = [
-                        rule for rule in dup_def.possible
+                        rule for rule in (dup_def.possible or [])
                         if rule.rule_id in rule_ids
                     ]
+                
+                # Clear duplicates for entities not in selection
+                for entity in list(filtered_config.duplicates.keys()):
+                    if entity not in selected_dup:
+                        del filtered_config.duplicates[entity]
+            else:
+                # User selected duplicates category but no specific rules - clear all
+                filtered_config.duplicates = {}
+        else:
+            # Key absent = user didn't select any duplicates - clear all
+            filtered_config.duplicates = {}
         
         # Filter relationships
-        if "relationships" in rules_selection and rules_selection["relationships"]:
-            selected_rel = rules_selection["relationships"]
-            for entity, rel_keys in selected_rel.items():
-                if entity in filtered_config.entities:
+        # If relationships key exists in selection, filter based on selection
+        # If it doesn't exist, clear ALL relationships (user didn't select any)
+        if "relationships" in rules_selection:
+            selected_rel = rules_selection.get("relationships", {})
+            if selected_rel:
+                # User selected specific relationship rules
+                for entity, rel_keys in selected_rel.items():
+                    if entity not in filtered_config.entities:
+                        missing_rules.extend([
+                            f"relationships.{entity}.{key}" 
+                            for key in rel_keys
+                        ])
+                        continue
+                        
                     entity_schema = filtered_config.entities[entity]
-                    # Filter relationships dict to only include selected keys
+                    # Get all existing relationship keys
+                    existing_keys = set(entity_schema.relationships.keys())
+                    
+                    # Check for missing keys
+                    for key in rel_keys:
+                        if key not in existing_keys:
+                            missing_rules.append(f"relationships.{entity}.{key}")
+                    
+                    # Filter relationships dict to only include selected keys that exist
                     entity_schema.relationships = {
                         key: rule
                         for key, rule in entity_schema.relationships.items()
                         if key in rel_keys
                     }
+                
+                # Clear relationships for entities not in selection
+                for entity in filtered_config.entities:
+                    if entity not in selected_rel:
+                        filtered_config.entities[entity].relationships = {}
+            else:
+                # User selected relationships category but no specific rules - clear all
+                for entity in filtered_config.entities:
+                    filtered_config.entities[entity].relationships = {}
+        else:
+            # Key absent = user didn't select any relationships - clear all
+            for entity in filtered_config.entities:
+                filtered_config.entities[entity].relationships = {}
         
         # Filter required fields
-        if "required_fields" in rules_selection and rules_selection["required_fields"]:
-            selected_req = rules_selection["required_fields"]
-            for entity, rule_ids in selected_req.items():
-                if entity in filtered_config.entities:
+        # If required_fields key exists in selection, filter based on selection
+        # If it doesn't exist, clear ALL required fields (user didn't select any)
+        if "required_fields" in rules_selection:
+            selected_req = rules_selection.get("required_fields", {})
+            if selected_req:
+                # User selected specific required field rules
+                for entity, rule_ids in selected_req.items():
+                    if entity not in filtered_config.entities:
+                        missing_rules.extend([
+                            f"required_fields.{entity}.{rule_id}" 
+                            for rule_id in rule_ids
+                        ])
+                        continue
+                        
                     entity_schema = filtered_config.entities[entity]
+                    # Get all existing rule identifiers
+                    existing_identifiers = set()
+                    for req in (entity_schema.missing_key_data or []):
+                        existing_identifiers.add(req.field)
+                        existing_identifiers.add(f"required.{entity}.{req.field}")
+                        if hasattr(req, "rule_id") and req.rule_id:
+                            existing_identifiers.add(req.rule_id)
+                    
+                    # Check for missing rule IDs
+                    for rule_id in rule_ids:
+                        if rule_id not in existing_identifiers:
+                            missing_rules.append(f"required_fields.{entity}.{rule_id}")
+                    
                     # Filter missing_key_data array
                     entity_schema.missing_key_data = [
-                        req for req in entity_schema.missing_key_data
+                        req for req in (entity_schema.missing_key_data or [])
                         if (req.field in rule_ids or
                             f"required.{entity}.{req.field}" in rule_ids or
                             getattr(req, "rule_id", None) in rule_ids)
                     ]
+                
+                # Clear required fields for entities not in selection
+                for entity in filtered_config.entities:
+                    if entity not in selected_req:
+                        filtered_config.entities[entity].missing_key_data = []
+            else:
+                # User selected required_fields category but no specific rules - clear all
+                for entity in filtered_config.entities:
+                    filtered_config.entities[entity].missing_key_data = []
+        else:
+            # Key absent = user didn't select any required fields - clear all
+            for entity in filtered_config.entities:
+                filtered_config.entities[entity].missing_key_data = []
+        
+        # Log warnings for missing rules
+        if missing_rules:
+            logger.warning(
+                "Some selected rules no longer exist in the current schema and will be ignored",
+                extra={
+                    "missing_rules": missing_rules,
+                    "run_config_has_rules": bool(rules_selection),
+                }
+            )
         
         # Note: attendance_rules is handled separately in attendance.run()
         # since it's not part of SchemaConfig

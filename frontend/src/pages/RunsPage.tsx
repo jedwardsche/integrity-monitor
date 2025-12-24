@@ -365,11 +365,17 @@ export function RunsPage() {
         const errorData = await response
           .json()
           .catch(() => ({ error: "Failed to cancel all runs" }));
-        throw new Error(errorData.error || errorData.detail?.error || "Failed to cancel all runs");
+        throw new Error(
+          errorData.error ||
+            errorData.detail?.error ||
+            "Failed to cancel all runs"
+        );
       }
 
       const result = await response.json();
-      alert(`Successfully cancelled ${result.cancelled_count || 0} running scan(s).`);
+      alert(
+        `Successfully cancelled ${result.cancelled_count || 0} running scan(s).`
+      );
     } catch (error) {
       console.error("Failed to cancel all runs:", error);
       let errorMessage = "Unknown error";
@@ -423,7 +429,11 @@ export function RunsPage() {
         const errorData = await response
           .json()
           .catch(() => ({ error: "Failed to delete all runs" }));
-        throw new Error(errorData.error || errorData.detail?.error || "Failed to delete all runs");
+        throw new Error(
+          errorData.error ||
+            errorData.detail?.error ||
+            "Failed to delete all runs"
+        );
       }
 
       const result = await response.json();
@@ -452,7 +462,6 @@ export function RunsPage() {
         return;
       }
 
-      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
       const params = new URLSearchParams({
         trigger: "manual",
       });

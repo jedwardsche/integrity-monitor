@@ -39,17 +39,26 @@ export VITE_FIREBASE_APP_ID=$(gcloud secrets versions access latest --secret="FI
 echo "Fetching Cloud Run backend URL..."
 REGION=${CLOUD_RUN_REGION:-us-central1}
 SERVICE_NAME="integrity-runner"
-CLOUD_RUN_URL=$(gcloud run services describe "$SERVICE_NAME" \
-  --region="$REGION" \
-  --project="$PROJECT_ID" \
-  --format="value(status.url)" 2>/dev/null || echo "")
 
-if [ -n "$CLOUD_RUN_URL" ]; then
-  export VITE_API_BASE="$CLOUD_RUN_URL"
-  echo "✅ Set VITE_API_BASE to: $CLOUD_RUN_URL"
+# Check if URL is provided via environment variable first
+if [ -n "$CLOUD_RUN_SERVICE_URL" ]; then
+  export VITE_API_BASE="$CLOUD_RUN_SERVICE_URL"
+  echo "✅ Set VITE_API_BASE from CLOUD_RUN_SERVICE_URL: $CLOUD_RUN_SERVICE_URL"
 else
-  echo "⚠️  Warning: Could not fetch Cloud Run URL. VITE_API_BASE will not be set."
-  echo "   Frontend will fall back to window.location.origin (may cause API errors)"
+  # Try to fetch from gcloud
+  CLOUD_RUN_URL=$(gcloud run services describe "$SERVICE_NAME" \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --format="value(status.url)" 2>/dev/null || echo "")
+
+  if [ -n "$CLOUD_RUN_URL" ]; then
+    export VITE_API_BASE="$CLOUD_RUN_URL"
+    echo "✅ Set VITE_API_BASE to: $CLOUD_RUN_URL"
+  else
+    echo "⚠️  Warning: Could not fetch Cloud Run URL. VITE_API_BASE will not be set."
+    echo "   Frontend will fall back to window.location.origin (may cause API errors)"
+    echo "   To fix: Set CLOUD_RUN_SERVICE_URL environment variable or ensure gcloud is configured"
+  fi
 fi
 echo ""
 
@@ -84,8 +93,26 @@ fi
 cd "$SCRIPT_DIR"
 
 # Build the frontend
+# Set CI mode and npm config to prevent interactive prompts
 echo "Building frontend..."
-npm run build
+export CI=true
+export npm_config_progress=false
+export npm_config_update_notifier=false
+export npm_config_audit=false
+
+# Check if dist already exists - if so, skip build (allows pre-building)
+if [ -d "dist" ] && [ -n "$(ls -A dist 2>/dev/null)" ]; then
+    echo "Frontend already built, skipping..."
+else
+    # For Firebase predeploy: run npm in a way that handles missing stdin
+    # Use a here-document to provide empty stdin
+    npm run build <<EOF
+EOF
+    BUILD_EXIT=$?
+    if [ $BUILD_EXIT -ne 0 ]; then
+        exit $BUILD_EXIT
+    fi
+fi
 
 echo ""
 echo "✅ Build complete!"
