@@ -44,9 +44,18 @@ export function RuleDetailPage() {
             // Check likely and possible arrays
             const likely = entityRules.likely || [];
             const possible = entityRules.possible || [];
+            // Try to find by full rule_id first, then by field name (last part of rule_id)
             foundRule =
               likely.find((r: any) => r.rule_id === ruleId) ||
               possible.find((r: any) => r.rule_id === ruleId) ||
+              likely.find((r: any) => {
+                const parts = r.rule_id?.split(".");
+                return parts && parts.length >= 3 && parts[parts.length - 1] === ruleId;
+              }) ||
+              possible.find((r: any) => {
+                const parts = r.rule_id?.split(".");
+                return parts && parts.length >= 3 && parts[parts.length - 1] === ruleId;
+              }) ||
               null;
           }
         } else if (category === "relationships" && entity) {

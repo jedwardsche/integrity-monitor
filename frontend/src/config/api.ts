@@ -27,8 +27,16 @@ export const API_BASE = (() => {
     }
 
     // Fallback for production: use the current origin
-    // This assumes the API is hosted at the same domain/origin
+    // WARNING: This assumes the API is hosted at the same domain/origin.
+    // If the backend is on Cloud Run at a different URL, this will fail.
+    // The frontend must be rebuilt with VITE_API_BASE set to the Cloud Run URL.
     const fallbackBase = window.location.origin;
+    console.warn(
+      `API_BASE fallback: Using ${fallbackBase} as API base URL. ` +
+      `This may be incorrect if the backend is on Cloud Run. ` +
+      `VITE_API_BASE was: ${envApiBase || 'not set'}. ` +
+      `Rebuild frontend with correct VITE_API_BASE to fix this.`
+    );
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/5d5f825f-e8a4-412f-af68-47be30198b26',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api.ts:24',message:'API_BASE resolved (fallback to origin)',data:{apiBase:fallbackBase,envApiBase,origin:window.location.origin,isLocalhost:false,warning:'Using origin fallback - backend may not be at this URL'},timestamp:Date.now(),sessionId:'debug-session',runId:'api-config',hypothesisId:'H9'})}).catch(()=>{});
     // #endregion agent log

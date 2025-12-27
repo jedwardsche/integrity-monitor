@@ -268,12 +268,13 @@ if [ "$DEPLOY_BACKEND" = true ]; then
         "--region" "$REGION"
         "--platform" "managed"
         "--allow-unauthenticated"
-        "--memory" "1Gi"
-        "--cpu" "1"
-        "--timeout" "15m"
+        "--memory" "4Gi"
+        "--cpu" "2"
+        "--timeout" "30m"
         "--min-instances" "0"
         "--max-instances" "10"
-        "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
+        "--concurrency" "80"
+        "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*},AIRTABLE_MIN_REQUEST_INTERVAL=0.05"
         "--set-secrets" "AIRTABLE_PAT=AIRTABLE_PAT:latest"
         "--set-secrets" "API_AUTH_TOKEN=API_AUTH_TOKEN:latest"
         "--set-secrets" "OPENAI_API_KEY=OPENAI_API_KEY:latest"
@@ -301,12 +302,13 @@ if [ "$DEPLOY_BACKEND" = true ]; then
             "--region" "$REGION"
             "--platform" "managed"
             "--allow-unauthenticated"
-            "--memory" "1Gi"
-            "--cpu" "1"
-            "--timeout" "15m"
+            "--memory" "4Gi"
+            "--cpu" "2"
+            "--timeout" "30m"
             "--min-instances" "0"
             "--max-instances" "10"
-            "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
+            "--concurrency" "80"
+            "--set-env-vars" "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*},AIRTABLE_MIN_REQUEST_INTERVAL=0.05"
             "--set-secrets" "AIRTABLE_PAT=AIRTABLE_PAT:latest"
             "--set-secrets" "API_AUTH_TOKEN=API_AUTH_TOKEN:latest"
             "--set-secrets" "OPENAI_API_KEY=OPENAI_API_KEY:latest"
@@ -364,25 +366,23 @@ if [ "$DEPLOY_FRONTEND" = true ]; then
         cd ..
     fi
 
-    # TypeScript compilation check (unless skipped)
-    if [ "$SKIP_TESTS" = false ]; then
-        print_status "Running TypeScript compilation check..."
-        cd frontend
-        if npm run build:check 2>/dev/null || npm run build; then
-            print_success "TypeScript compilation passed"
-        else
-            print_error "TypeScript compilation failed"
-            print_warning "Fix errors or use --skip-tests to skip this check"
-            exit 1
-        fi
-        cd ..
-    else
-        # Build without strict type checking
-        print_status "Building frontend (skipping type checks)..."
-        cd frontend
-        npm run build
-        cd ..
+    # Build frontend using build-with-secrets.sh which sets VITE_API_BASE to Cloud Run URL
+    print_status "Building frontend with Cloud Run API URL..."
+    cd frontend
+    if [ ! -f "build-with-secrets.sh" ]; then
+        print_error "frontend/build-with-secrets.sh not found"
+        exit 1
     fi
+    ./build-with-secrets.sh
+    BUILD_EXIT=$?
+    cd ..
+    
+    if [ $BUILD_EXIT -ne 0 ]; then
+        print_error "Frontend build failed"
+        exit 1
+    fi
+    
+    print_success "Frontend built successfully"
 
     print_status "Deploying to Firebase Hosting..."
 

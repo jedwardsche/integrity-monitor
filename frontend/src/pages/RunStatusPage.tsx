@@ -5,9 +5,17 @@ import { useRunLogs } from "../hooks/useRunLogs";
 import { useAuth } from "../hooks/useAuth";
 import { API_BASE } from "../config/api";
 import { IssueList } from "../components/IssueList";
-import { collection, query, where, getDocs, limit } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  limit,
+  onSnapshot,
+} from "firebase/firestore";
 import { db } from "../config/firebase";
 import { doc, getDoc } from "firebase/firestore";
+import { formatRuleId } from "../utils/ruleFormatter";
 
 export function RunStatusPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -23,6 +31,16 @@ export function RunStatusPage() {
     id: string;
     name: string;
   } | null>(null);
+  const [rulesUsed, setRulesUsed] = useState<
+    Array<{
+      rule_id: string;
+      category: string;
+      entity?: string;
+      ruleId: string;
+      displayName: string;
+    }>
+  >([]);
+  const [loadingRules, setLoadingRules] = useState(false);
 
   // Calculate isRunning safely - will be false if runStatus is not available yet
   const statusLower = runStatus?.status?.toLowerCase() || "";
@@ -128,6 +146,134 @@ export function RunStatusPage() {
 
     fetchScheduleInfo();
   }, [runId, runStatus?.trigger]);
+
+  // Fetch unique rules used in this run (real-time updates during active runs)
+  useEffect(() => {
+    if (!runId) {
+      setRulesUsed([]);
+      setLoadingRules(false);
+      return;
+    }
+
+    setLoadingRules(true);
+    const issuesRef = collection(db, "integrity_issues");
+    const q = query(
+      issuesRef,
+      where("run_id", "==", runId),
+      limit(1000) // Get enough issues to find all unique rules
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const ruleMap = new Map<
+          string,
+          {
+            rule_id: string;
+            category: string;
+            entity?: string;
+            ruleId: string;
+            displayName: string;
+          }
+        >();
+
+        snapshot.forEach((doc) => {
+          const issue = doc.data();
+          const ruleId = issue.rule_id;
+          if (!ruleId || ruleMap.has(ruleId)) return;
+
+          // Parse rule_id to determine category, entity, and ruleId for navigation
+          let category = "";
+          let entity: string | undefined = undefined;
+          let ruleIdForNav = ruleId;
+
+          // Entity pluralization mapping
+          const entityPluralMap: Record<string, string> = {
+            student: "students",
+            students: "students",
+            parent: "parents",
+            parents: "parents",
+            contractor: "contractors",
+            contractors: "contractors",
+            class: "classes",
+            classes: "classes",
+            attendance: "attendance",
+            truth: "truth",
+            payment: "payments",
+            payments: "payments",
+            data_issue: "data_issues",
+            data_issues: "data_issues",
+          };
+
+          if (ruleId.startsWith("dup.")) {
+            category = "duplicates";
+            const parts = ruleId.split(".");
+            if (parts.length >= 3) {
+              const entitySingular = parts[1];
+              entity = entityPluralMap[entitySingular] || entitySingular;
+              // Extract just the field name (last part) for duplicates
+              ruleIdForNav = parts[parts.length - 1];
+            }
+          } else if (ruleId.startsWith("link.")) {
+            category = "relationships";
+            const parts = ruleId.split(".");
+            if (parts.length >= 2) {
+              const entitySingular = parts[1];
+              entity = entityPluralMap[entitySingular] || entitySingular;
+              // For relationships, use the relationship key (everything after entity)
+              ruleIdForNav = parts.slice(2).join(".") || parts[1];
+            }
+          } else if (ruleId.startsWith("required.")) {
+            category = "required_fields";
+            const parts = ruleId.split(".");
+            if (parts.length >= 3) {
+              const entitySingular = parts[1];
+              entity = entityPluralMap[entitySingular] || entitySingular;
+              const field = parts[2];
+              ruleIdForNav = field; // Just the field name for required_fields
+            }
+          } else if (
+            ruleId.startsWith("attendance.") ||
+            ruleId.includes("absence") ||
+            ruleId.includes("tardy")
+          ) {
+            category = "attendance_rules";
+            // Extract metric name from rule_id
+            const parts = ruleId.split(".");
+            if (parts.length >= 2) {
+              ruleIdForNav = parts[1] || ruleId.replace("attendance.", "");
+            } else {
+              // Try to extract from rule_id like "absence_rate_30d" or "consecutive_absences"
+              ruleIdForNav = ruleId.replace("attendance.", "");
+            }
+          }
+
+          if (category) {
+            ruleMap.set(ruleId, {
+              rule_id: ruleId,
+              category,
+              entity,
+              ruleId: ruleIdForNav,
+              displayName: formatRuleId(ruleId),
+            });
+          }
+        });
+
+        setRulesUsed(
+          Array.from(ruleMap.values()).sort((a, b) =>
+            a.displayName.localeCompare(b.displayName)
+          )
+        );
+        setLoadingRules(false);
+      },
+      (error) => {
+        console.error("Failed to fetch rules:", error);
+        setLoadingRules(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [runId]);
 
   if (loading) {
     return (
@@ -651,10 +797,76 @@ export function RunStatusPage() {
             </div>
           </div>
         )}
+
+        {/* Rules Used */}
+        <div className="mt-6 pt-6 border-t border-[var(--border)]">
+          <div className="text-sm font-medium text-[var(--text-main)] mb-3">
+            Rules Used in This Scan
+          </div>
+          {loadingRules ? (
+            <div className="text-xs text-[var(--text-muted)]">
+              Loading rules...
+            </div>
+          ) : rulesUsed.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {rulesUsed.map((rule) => {
+                // Build navigation path to rules page with entity highlight
+                let navPath = "";
+                if (rule.entity) {
+                  navPath = `/rules?entity=${rule.entity}`;
+                } else if (rule.category === "attendance_rules") {
+                  navPath = `/rules?entity=attendance`;
+                }
+
+                return (
+                  <a
+                    key={rule.rule_id}
+                    href={navPath}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (navPath) {
+                        navigate(navPath);
+                      }
+                    }}
+                    className={`inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      navPath
+                        ? "bg-[var(--bg-mid)] text-[var(--text-main)] hover:bg-[var(--bg-mid)]/80 cursor-pointer border border-[var(--border)]"
+                        : "bg-gray-100 text-gray-600 cursor-default"
+                    }`}
+                    title={rule.rule_id}
+                  >
+                    {rule.displayName}
+                    {navPath && (
+                      <svg
+                        className="ml-1.5 w-3 h-3"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 5l7 7-7 7"
+                        />
+                      </svg>
+                    )}
+                  </a>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-xs text-[var(--text-muted)]">
+              {isRunning
+                ? "Rules will appear here as issues are discovered..."
+                : "No rules found in this scan."}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Current Step Progress Indicator */}
-      {isRunning && (
+      {/* {isRunning && (
         <div className="rounded-2xl border border-[var(--border)] bg-white p-6 mb-6">
           <div className="mb-3">
             <div className="flex items-center justify-between mb-2">
@@ -761,7 +973,7 @@ export function RunStatusPage() {
             );
           })()}
         </div>
-      )}
+      )} */}
 
       {/* Issues from This Run */}
       {(!isRunning ||
@@ -803,7 +1015,7 @@ export function RunStatusPage() {
             {/* Tab Content */}
             {activeIssueTab === "new" ? (
               <IssueList
-                key="new-issues"
+                key={`new-issues-${runId}`}
                 filters={{
                   run_id: runId,
                   first_seen_in_run: runId,
@@ -812,7 +1024,7 @@ export function RunStatusPage() {
               />
             ) : (
               <IssueList
-                key="all-issues"
+                key={`all-issues-${runId}`}
                 filters={{ run_id: runId, status: "all" }}
               />
             )}

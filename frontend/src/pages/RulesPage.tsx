@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useRules } from "../hooks/useRules";
 import type { RulesByCategory } from "../hooks/useRules";
 import { useAuth } from "../hooks/useAuth";
@@ -8,26 +8,40 @@ import { AIRuleCreator } from "../components/AIRuleCreator";
 import ConfirmModal from "../components/ConfirmModal";
 import trashIcon from "../assets/trash.svg";
 
-type Category =
-  | "duplicates"
-  | "relationships"
-  | "required_fields"
-  | "attendance_rules";
+type EntityName = string;
 
-const CATEGORY_LABELS: Record<Category, string> = {
-  duplicates: "Duplicate Rules",
-  relationships: "Relationship Rules",
-  required_fields: "Required Field Rules",
-  attendance_rules: "Attendance Rules",
+// Map of entity names to display names
+const ENTITY_DISPLAY_NAMES: Record<string, string> = {
+  students: "Students",
+  parents: "Parents",
+  contractors: "Contractors",
+  classes: "Classes",
+  attendance: "Attendance",
+  truth: "Truth",
+  student_truth: "Student Truth",
+  payments: "Payments",
 };
+
+// Entity-centric structure
+interface EntityRules {
+  entity: string;
+  duplicates: {
+    likely: any[];
+    possible: any[];
+  };
+  relationships: Record<string, any>;
+  required_fields: any[];
+}
 
 export function RulesPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const { loadRules, createRule, updateRule, deleteRule, loading, error } =
     useRules();
   const [rules, setRules] = useState<RulesByCategory | null>(null);
-  const [activeCategory, setActiveCategory] = useState<Category>("duplicates");
+  const entityFromUrl = searchParams.get("entity") || "students";
+  const [activeEntity, setActiveEntity] = useState<EntityName>(entityFromUrl);
   const [showAICreator, setShowAICreator] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
   const [editingRule, setEditingRule] = useState<{
@@ -41,6 +55,10 @@ export function RulesPage() {
     entity?: string;
     ruleId: string;
   } | null>(null);
+  const entityTabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [highlightedEntity, setHighlightedEntity] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     // Only fetch rules if user is authenticated
@@ -48,6 +66,38 @@ export function RulesPage() {
       fetchRules();
     }
   }, [user]);
+
+  // Handle entity from URL parameter
+  useEffect(() => {
+    const entityParam = searchParams.get("entity");
+    if (entityParam) {
+      // Only update if different from current active entity
+      if (entityParam !== activeEntity) {
+        setActiveEntity(entityParam);
+      }
+      // Highlight the entity tab
+      setHighlightedEntity(entityParam);
+      // Scroll to the entity tab if it exists
+      setTimeout(() => {
+        const tabRef = entityTabRefs.current[entityParam];
+        if (tabRef) {
+          tabRef.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+            inline: "center",
+          });
+        }
+      }, 100);
+      // Remove highlight after 3 seconds
+      setTimeout(() => {
+        setHighlightedEntity(null);
+        // Remove query parameter after highlighting
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete("entity");
+        setSearchParams(newParams, { replace: true });
+      }, 3000);
+    }
+  }, [searchParams, activeEntity, setSearchParams]);
 
   const fetchRules = async () => {
     try {
@@ -83,23 +133,18 @@ export function RulesPage() {
     }
   };
 
-  const handleSaveRule = async (ruleData: Record<string, any>) => {
+  const handleSaveRule = async (
+    ruleData: Record<string, any>,
+    category: string,
+    entity: string | null
+  ) => {
     if (!editingRule) return;
 
     try {
       if (editingRule.ruleId) {
-        await updateRule(
-          editingRule.category,
-          editingRule.ruleId,
-          editingRule.entity || null,
-          ruleData
-        );
+        await updateRule(category, editingRule.ruleId, entity, ruleData);
       } else {
-        await createRule(
-          editingRule.category,
-          editingRule.entity || null,
-          ruleData
-        );
+        await createRule(category, entity, ruleData);
       }
       await fetchRules();
       setShowEditor(false);
@@ -107,6 +152,16 @@ export function RulesPage() {
     } catch (err) {
       console.error("Failed to save rule:", err);
     }
+  };
+
+  const handleEditClick = (
+    category: string,
+    entity: string | undefined,
+    ruleId: string,
+    rule: Record<string, any>
+  ) => {
+    setEditingRule({ category, entity, ruleId, rule });
+    setShowEditor(true);
   };
 
   const handleDeleteClick = (
@@ -130,174 +185,301 @@ export function RulesPage() {
       setDeletingRule(null);
     } catch (err) {
       console.error("Failed to delete rule:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to delete rule";
+      alert(`Failed to delete rule: ${errorMessage}`);
+      setDeletingRule(null);
     }
   };
 
-  const renderDuplicateRules = () => {
-    if (!rules?.duplicates) return null;
+  // Reorganize rules by entity
+  const getEntitiesWithRules = (): EntityName[] => {
+    if (!rules) return [];
 
-    return Object.entries(rules.duplicates).map(
-      ([entity, entityRules]: [string, any]) => (
-        <div key={entity} className="mb-6">
-          <h3 className="text-lg font-semibold text-[var(--text-main)] mb-3 capitalize">
-            {entity}
-          </h3>
-          <div className="space-y-4">
-            {entityRules.likely && entityRules.likely.length > 0 && (
-              <div>
+    const entities = new Set<string>();
+
+    // Collect entities from all rule types
+    Object.keys(rules.duplicates || {}).forEach((e) => entities.add(e));
+    Object.keys(rules.relationships || {}).forEach((e) => entities.add(e));
+    Object.keys(rules.required_fields || {}).forEach((e) => entities.add(e));
+
+    return Array.from(entities).sort();
+  };
+
+  const getEntityRules = (entity: string): EntityRules => {
+    return {
+      entity,
+      duplicates: (rules?.duplicates?.[entity] as any) || {
+        likely: [],
+        possible: [],
+      },
+      relationships: (rules?.relationships?.[entity] as any) || {},
+      required_fields: (rules?.required_fields?.[entity] as any[]) || [],
+    };
+  };
+
+  const renderEntityRules = () => {
+    const entityRules = getEntityRules(activeEntity);
+
+    const totalRules =
+      (entityRules.duplicates.likely?.length || 0) +
+      (entityRules.duplicates.possible?.length || 0) +
+      Object.keys(entityRules.relationships).length +
+      (entityRules.required_fields?.length || 0);
+
+    if (totalRules === 0) {
+      return (
+        <div className="text-center py-12 text-[var(--text-muted)]">
+          <p className="text-lg mb-2">No rules configured for {activeEntity}</p>
+          <p className="text-sm">
+            Create your first rule using the buttons above
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-8">
+        {/* Duplicate Rules */}
+        {(entityRules.duplicates.likely?.length > 0 ||
+          entityRules.duplicates.possible?.length > 0) && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-[var(--text-main)]">
+                Duplicate Detection Rules
+              </h3>
+              <button
+                onClick={() => {
+                  setEditingRule({
+                    category: "duplicates",
+                    entity: activeEntity,
+                    ruleId: "",
+                    rule: {},
+                  });
+                  setShowEditor(true);
+                }}
+                className="px-3 py-1.5 text-sm border border-[var(--border)] rounded-lg hover:bg-gray-50"
+              >
+                + Add Duplicate Rule
+              </button>
+            </div>
+
+            {entityRules.duplicates.likely?.length > 0 && (
+              <div className="mb-4">
                 <h4 className="text-sm font-medium text-[var(--text-muted)] mb-2">
                   Likely Duplicates
                 </h4>
-                {entityRules.likely.map((rule: any, idx: number) => (
-                  <RuleCard
-                    key={idx}
-                    rule={rule}
-                    entity={entity}
-                    category="duplicates"
-                    ruleId={rule.rule_id}
-                    onView={() =>
-                      navigate(`/rules/duplicates/${entity}/${rule.rule_id}`)
-                    }
-                    onDelete={() =>
-                      handleDeleteClick("duplicates", entity, rule.rule_id)
-                    }
-                  />
-                ))}
+                <div className="space-y-3">
+                  {entityRules.duplicates.likely.map(
+                    (rule: any, idx: number) => (
+                      <RuleCard
+                        key={idx}
+                        rule={rule}
+                        entity={activeEntity}
+                        category="duplicates"
+                        ruleId={rule.rule_id}
+                        onView={() =>
+                          navigate(
+                            `/rules/duplicates/${activeEntity}/${rule.rule_id}`
+                          )
+                        }
+                        onEdit={() =>
+                          handleEditClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id,
+                            rule
+                          )
+                        }
+                        onDelete={() =>
+                          handleDeleteClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id
+                          )
+                        }
+                      />
+                    )
+                  )}
+                </div>
               </div>
             )}
-            {entityRules.possible && entityRules.possible.length > 0 && (
+
+            {entityRules.duplicates.possible?.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium text-[var(--text-muted)] mb-2">
                   Possible Duplicates
                 </h4>
-                {entityRules.possible.map((rule: any, idx: number) => (
-                  <RuleCard
-                    key={idx}
-                    rule={rule}
-                    entity={entity}
-                    category="duplicates"
-                    ruleId={rule.rule_id}
-                    onView={() =>
-                      navigate(`/rules/duplicates/${entity}/${rule.rule_id}`)
-                    }
-                    onDelete={() =>
-                      handleDeleteClick("duplicates", entity, rule.rule_id)
-                    }
-                  />
-                ))}
+                <div className="space-y-3">
+                  {entityRules.duplicates.possible.map(
+                    (rule: any, idx: number) => (
+                      <RuleCard
+                        key={idx}
+                        rule={rule}
+                        entity={activeEntity}
+                        category="duplicates"
+                        ruleId={rule.rule_id}
+                        onView={() =>
+                          navigate(
+                            `/rules/duplicates/${activeEntity}/${rule.rule_id}`
+                          )
+                        }
+                        onEdit={() =>
+                          handleEditClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id,
+                            rule
+                          )
+                        }
+                        onDelete={() =>
+                          handleDeleteClick(
+                            "duplicates",
+                            activeEntity,
+                            rule.rule_id
+                          )
+                        }
+                      />
+                    )
+                  )}
+                </div>
               </div>
             )}
           </div>
-        </div>
-      )
-    );
-  };
+        )}
 
-  const renderRelationshipRules = () => {
-    if (!rules?.relationships) return null;
-
-    return Object.entries(rules.relationships).map(
-      ([entity, entityRels]: [string, any]) => (
-        <div key={entity} className="mb-6">
-          <h3 className="text-lg font-semibold text-[var(--text-main)] mb-3 capitalize">
-            {entity}
-          </h3>
-          <div className="space-y-3">
-            {Object.entries(entityRels).map(
-              ([relKey, relRule]: [string, any]) => (
-                <RuleCard
-                  key={relKey}
-                  rule={relRule}
-                  entity={entity}
-                  category="relationships"
-                  ruleId={relKey}
-                  onView={() =>
-                    navigate(`/rules/relationships/${entity}/${relKey}`)
-                  }
-                  onDelete={() =>
-                    handleDeleteClick("relationships", entity, relKey)
-                  }
-                />
-              )
-            )}
+        {/* Relationship Rules */}
+        {Object.keys(entityRules.relationships).length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-[var(--text-main)]">
+                Relationship Rules
+              </h3>
+              <button
+                onClick={() => {
+                  setEditingRule({
+                    category: "relationships",
+                    entity: activeEntity,
+                    ruleId: "",
+                    rule: {},
+                  });
+                  setShowEditor(true);
+                }}
+                className="px-3 py-1.5 text-sm border border-[var(--border)] rounded-lg hover:bg-gray-50"
+              >
+                + Add Relationship Rule
+              </button>
+            </div>
+            <div className="space-y-3">
+              {Object.entries(entityRules.relationships).map(
+                ([relKey, relRule]: [string, any]) => (
+                  <RuleCard
+                    key={relKey}
+                    rule={relRule}
+                    entity={activeEntity}
+                    category="relationships"
+                    ruleId={relKey}
+                    onView={() =>
+                      navigate(`/rules/relationships/${activeEntity}/${relKey}`)
+                    }
+                    onEdit={() =>
+                      handleEditClick(
+                        "relationships",
+                        activeEntity,
+                        relKey,
+                        relRule
+                      )
+                    }
+                    onDelete={() =>
+                      handleDeleteClick("relationships", activeEntity, relKey)
+                    }
+                  />
+                )
+              )}
+            </div>
           </div>
-        </div>
-      )
-    );
-  };
+        )}
 
-  const renderRequiredFieldRules = () => {
-    if (!rules?.required_fields) return null;
+        {/* Required Field Rules */}
+        {entityRules.required_fields?.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-[var(--text-main)]">
+                Required Field Rules
+              </h3>
+              <button
+                onClick={() => {
+                  setEditingRule({
+                    category: "required_fields",
+                    entity: activeEntity,
+                    ruleId: "",
+                    rule: {},
+                  });
+                  setShowEditor(true);
+                }}
+                className="px-3 py-1.5 text-sm border border-[var(--border)] rounded-lg hover:bg-gray-50"
+              >
+                + Add Required Field
+              </button>
+            </div>
+            <div className="space-y-3">
+              {entityRules.required_fields.map(
+                (fieldRule: any, idx: number) => {
+                  // For required_fields, the rule_id might be missing, so use document ID or generate from field
+                  // The document ID in Firestore is typically {entity}_{field}
+                  const ruleId =
+                    fieldRule.rule_id ||
+                    (fieldRule.field
+                      ? `${activeEntity}_${fieldRule.field}`
+                      : undefined);
 
-    return Object.entries(rules.required_fields).map(
-      ([entity, fields]: [string, any]) => (
-        <div key={entity} className="mb-6">
-          <h3 className="text-lg font-semibold text-[var(--text-main)] mb-3 capitalize">
-            {entity}
-          </h3>
-          <div className="space-y-3">
-            {Array.isArray(fields) &&
-              fields.map((fieldRule: any, idx: number) => (
-                <RuleCard
-                  key={idx}
-                  rule={fieldRule}
-                  entity={entity}
-                  category="required_fields"
-                  ruleId={fieldRule.field || fieldRule.rule_id}
-                  onView={() =>
-                    navigate(
-                      `/rules/required_fields/${entity}/${
-                        fieldRule.field || fieldRule.rule_id
-                      }`
-                    )
+                  if (!ruleId) {
+                    console.warn(
+                      "Required field rule missing rule_id and field:",
+                      fieldRule
+                    );
+                    return null;
                   }
-                  onDelete={() =>
-                    handleDeleteClick(
-                      "required_fields",
-                      entity,
-                      fieldRule.field || fieldRule.rule_id
-                    )
-                  }
-                />
-              ))}
+
+                  return (
+                    <RuleCard
+                      key={idx}
+                      rule={fieldRule}
+                      entity={activeEntity}
+                      category="required_fields"
+                      ruleId={ruleId}
+                      onView={() =>
+                        navigate(
+                          `/rules/required_fields/${activeEntity}/${ruleId}`
+                        )
+                      }
+                      onEdit={() =>
+                        handleEditClick(
+                          "required_fields",
+                          activeEntity,
+                          ruleId,
+                          fieldRule
+                        )
+                      }
+                      onDelete={() =>
+                        handleDeleteClick(
+                          "required_fields",
+                          activeEntity,
+                          ruleId
+                        )
+                      }
+                    />
+                  );
+                }
+              )}
+            </div>
           </div>
-        </div>
-      )
-    );
-  };
-
-  const renderAttendanceRules = () => {
-    if (!rules?.attendance_rules) return null;
-
-    return (
-      <div>
-        <RuleCard
-          rule={rules.attendance_rules}
-          category="attendance_rules"
-          ruleId="attendance_rules"
-          onView={() => navigate(`/rules/attendance_rules/_/attendance_rules`)}
-          onDelete={() =>
-            handleDeleteClick("attendance_rules", undefined, "attendance_rules")
-          }
-        />
+        )}
       </div>
     );
   };
 
-  const renderCategoryContent = () => {
-    switch (activeCategory) {
-      case "duplicates":
-        return renderDuplicateRules();
-      case "relationships":
-        return renderRelationshipRules();
-      case "required_fields":
-        return renderRequiredFieldRules();
-      case "attendance_rules":
-        return renderAttendanceRules();
-      default:
-        return null;
-    }
-  };
+  const entities = getEntitiesWithRules();
 
   return (
     <div className="space-y-6">
@@ -310,14 +492,15 @@ export function RulesPage() {
             Rules Management
           </h1>
           <p className="text-[var(--text-muted)]">
-            View, create, edit, and delete data integrity rules
+            Configure data integrity rules by table
           </p>
         </div>
         <div className="flex gap-3">
           <button
             onClick={() => {
               setEditingRule({
-                category: activeCategory,
+                category: "duplicates",
+                entity: activeEntity,
                 ruleId: "",
                 rule: {},
               });
@@ -342,21 +525,32 @@ export function RulesPage() {
         </div>
       )}
 
-      {/* Category Tabs */}
-      <div className="flex gap-2 border-b border-[var(--border)]">
-        {(Object.keys(CATEGORY_LABELS) as Category[]).map((category) => (
-          <button
-            key={category}
-            onClick={() => setActiveCategory(category)}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
-              activeCategory === category
-                ? "text-[var(--cta-blue)] border-b-2 border-[var(--cta-blue)]"
-                : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
-            }`}
-          >
-            {CATEGORY_LABELS[category]}
-          </button>
-        ))}
+      {/* Entity/Table Tabs */}
+      <div className="flex gap-2 border-b border-[var(--border)] overflow-x-auto">
+        {entities.map((entity) => {
+          const isHighlighted = highlightedEntity === entity;
+          const isActive = activeEntity === entity;
+          return (
+            <button
+              key={entity}
+              ref={(el) => {
+                entityTabRefs.current[entity] = el;
+              }}
+              onClick={() => setActiveEntity(entity)}
+              className={`px-4 py-2 text-sm font-medium transition-all whitespace-nowrap ${
+                isActive
+                  ? "text-[var(--cta-blue)] border-b-2 border-[var(--cta-blue)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
+              } ${
+                isHighlighted
+                  ? "bg-[var(--cta-blue)]/10 ring-2 ring-[var(--cta-blue)] ring-offset-2 rounded-t-lg"
+                  : ""
+              }`}
+            >
+              {ENTITY_DISPLAY_NAMES[entity] || entity}
+            </button>
+          );
+        })}
       </div>
 
       {/* Rules Content */}
@@ -365,8 +559,15 @@ export function RulesPage() {
           <div className="text-center py-8 text-[var(--text-muted)]">
             Loading rules...
           </div>
+        ) : entities.length === 0 ? (
+          <div className="text-center py-12 text-[var(--text-muted)]">
+            <p className="text-lg mb-2">No rules configured yet</p>
+            <p className="text-sm">
+              Create your first rule using the buttons above
+            </p>
+          </div>
         ) : (
-          renderCategoryContent()
+          renderEntityRules()
         )}
       </div>
 
@@ -375,6 +576,7 @@ export function RulesPage() {
         isOpen={showAICreator}
         onClose={() => setShowAICreator(false)}
         onRuleParsed={handleCreateRule}
+        currentEntity={activeEntity}
       />
 
       {showEditor && editingRule && (
@@ -389,6 +591,7 @@ export function RulesPage() {
           entity={editingRule.entity}
           initialRule={editingRule.rule}
           mode={editingRule.ruleId ? "edit" : "create"}
+          currentEntity={activeEntity}
         />
       )}
 
@@ -412,6 +615,7 @@ interface RuleCardProps {
   entity?: string;
   ruleId?: string;
   onView: () => void;
+  onEdit: () => void;
   onDelete: () => void;
 }
 
@@ -421,29 +625,17 @@ function RuleCard({
   entity,
   ruleId,
   onView,
+  onEdit,
   onDelete,
 }: RuleCardProps) {
-  const source = rule.source || "yaml";
-  const isFirestore = source === "firestore";
-
   return (
-    <div className="p-4 border border-[var(--border)] rounded-lg hover:bg-gray-50">
+    <div className="p-4 border border-[var(--border)] rounded-lg hover:bg-gray-50 transition-colors">
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
             <h4 className="font-medium text-[var(--text-main)]">
               {rule.rule_id || ruleId || rule.field || "Rule"}
             </h4>
-            {isFirestore && (
-              <span className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
-                Firestore
-              </span>
-            )}
-            {!isFirestore && (
-              <span className="px-2 py-1 text-xs bg-gray-100 text-gray-800 rounded">
-                YAML Base
-              </span>
-            )}
             {rule.severity && (
               <span
                 className={`px-2 py-1 text-xs rounded ${
@@ -457,6 +649,11 @@ function RuleCard({
                 {rule.severity}
               </span>
             )}
+            {rule.enabled === false && (
+              <span className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">
+                Disabled
+              </span>
+            )}
           </div>
           <p className="text-sm text-[var(--text-muted)] mb-2">
             {rule.description ||
@@ -467,6 +664,12 @@ function RuleCard({
             <div className="text-xs text-[var(--text-muted)]">
               Target: {rule.target} | Min: {rule.min_links || 0} | Max:{" "}
               {rule.max_links || "∞"}
+            </div>
+          )}
+          {category === "required_fields" && (
+            <div className="text-xs text-[var(--text-muted)]">
+              Field: {rule.field}
+              {rule.condition_type && ` | Condition: ${rule.condition_type}`}
             </div>
           )}
         </div>
@@ -492,23 +695,41 @@ function RuleCard({
               <line x1="12" y1="8" x2="12.01" y2="8"></line>
             </svg>
           </button>
-          {isFirestore && (
-            <button
-              onClick={onDelete}
-              className="p-2 hover:bg-red-50 rounded transition-colors"
-              title="Delete Rule"
+          <button
+            onClick={onEdit}
+            className="p-2 text-gray-600 hover:bg-gray-100 rounded transition-colors"
+            title="Edit Rule"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              <img
-                src={trashIcon}
-                alt="Delete"
-                className="w-5 h-5"
-                style={{
-                  filter:
-                    "brightness(0) saturate(100%) invert(20%) sepia(100%) saturate(5000%) hue-rotate(350deg) brightness(90%) contrast(100%)",
-                }}
-              />
-            </button>
-          )}
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-2 hover:bg-red-50 rounded transition-colors"
+            title="Delete Rule"
+          >
+            <img
+              src={trashIcon}
+              alt="Delete"
+              className="w-5 h-5"
+              style={{
+                filter:
+                  "brightness(0) saturate(100%) invert(20%) sepia(100%) saturate(5000%) hue-rotate(350deg) brightness(90%) contrast(100%)",
+              }}
+            />
+          </button>
         </div>
       </div>
     </div>

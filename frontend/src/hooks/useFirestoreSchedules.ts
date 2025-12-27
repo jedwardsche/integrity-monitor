@@ -16,6 +16,12 @@ import { useAuth } from "./useAuth";
 
 export interface ScheduleRunConfig {
   entities?: string[];
+  rules?: {
+    duplicates?: Record<string, string[]>;  // entity -> rule_ids[]
+    relationships?: Record<string, string[]>;  // entity -> rule_ids[]
+    required_fields?: Record<string, string[]>;  // entity -> rule_ids[]
+    attendance_rules?: boolean;  // true/false (not per-entity)
+  };
 }
 
 export interface Schedule {

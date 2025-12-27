@@ -108,11 +108,20 @@ class FirestoreWriter:
         if run_id:
             def log_progress(current: int, total: int, percentage: float) -> None:
                 try:
-                    self.write_log(
-                        run_id,
-                        "info",
-                        f"Writing issues to Firestore: {current:,}/{total:,} ({percentage:.1f}%)"
-                    )
+                    if percentage < 10.0:
+                        # During existence check phase
+                        self.write_log(
+                            run_id,
+                            "info",
+                            f"Checking which issues already exist: {current:,}/{total:,} ({percentage:.1f}%)"
+                        )
+                    else:
+                        # During writing phase
+                        self.write_log(
+                            run_id,
+                            "info",
+                            f"Writing issues to Firestore: {current:,}/{total:,} ({percentage:.1f}%)"
+                        )
                 except Exception:
                     pass  # Don't fail on logging errors
             

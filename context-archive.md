@@ -186,7 +186,7 @@ Optionally set a boolean Has Data Issues field on the affected record for easy f
 
 ### ~~1. MAJOR: Airtable Client is a Stub - No Actual Data Fetching~~ ✅ FIXED
 **Resolution**: Implemented full pyairtable integration with:
-- Actual API client initialization with `AIRTABLE_API_KEY`
+- Actual API client initialization with `AIRTABLE_PAT` (Personal Access Token)
 - Incremental fetch support using `LAST_MODIFIED_TIME()` formula
 - Automatic pagination with `table.all()`
 - Rate limiting and retry logic with exponential backoff

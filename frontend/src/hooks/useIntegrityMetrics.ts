@@ -4,6 +4,7 @@ import { useFirestoreMetrics } from "./useFirestoreMetrics";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from "../config/firebase";
 import { useEffect, useState } from "react";
+import { API_BASE } from "../config/api";
 
 type IssueSummary = {
   total: number;
@@ -225,7 +226,6 @@ export function useIntegrityMetrics() {
 
   // Fetch derived metrics from API
   useEffect(() => {
-    const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || window.location.origin;
     setDerivedLoading(true);
     
     fetch(`${API_BASE}/integrity/metrics/derived`)
@@ -260,7 +260,6 @@ export function useIntegrityMetrics() {
 
   // Load flagged rules from API
   useEffect(() => {
-    const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || window.location.origin;
     setFlaggedRulesLoading(true);
     
     fetch(`${API_BASE}/integrity/metrics/flagged-rules`)
@@ -283,7 +282,6 @@ export function useIntegrityMetrics() {
 
   // Load KPI data from API
   useEffect(() => {
-    const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || window.location.origin;
     setKpiLoading(true);
     
     fetch(`${API_BASE}/integrity/metrics/kpi?weeks=8`)

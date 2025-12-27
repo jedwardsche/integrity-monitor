@@ -36,14 +36,15 @@ export function IssueList({
   const [search, setSearch] = useState("");
   const [pageInput, setPageInput] = useState("");
 
-  // Sync filters when initialFilters change (from parent component like DashboardContent)
+  // Sync filters when initialFilters change (from parent component like DashboardContent or RunStatusPage)
   useEffect(() => {
     if (initialFilters) {
-      // When filters come from parent (like queue selection), replace filters completely
-      // This ensures queue filtering works correctly
+      // When filters come from parent (like queue selection or run status page), replace filters completely
+      // This ensures queue filtering and run-specific filtering works correctly
       setFilters({
         ...initialFilters,
         // Default to "open" status if not specified and we have a type filter (from queue)
+        // But preserve "all" if explicitly set (e.g., from RunStatusPage)
         status: initialFilters.status || (initialFilters.type ? "open" : "all"),
       });
     }

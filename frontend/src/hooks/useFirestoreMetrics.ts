@@ -5,6 +5,8 @@ import {
   orderBy,
   limit,
   onSnapshot,
+  where,
+  Timestamp,
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 
@@ -26,110 +28,121 @@ export function useFirestoreMetrics(days: number = 14) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const metricsRef = collection(db, "integrity_metrics_daily");
-    const q = query(metricsRef, orderBy("date", "desc"), limit(days));
+    // Query runs from the last N days
+    const runsRef = collection(db, "integrity_runs");
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    const cutoffTimestamp = Timestamp.fromDate(cutoffDate);
+    
+    const q = query(
+      runsRef,
+      where("started_at", ">=", cutoffTimestamp),
+      orderBy("started_at", "desc")
+    );
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         try {
-          const trendData: TrendDataItem[] = [];
-          let latestSeverity = { critical: 0, warning: 0, info: 0 };
+          // Group runs by day and aggregate counts
+          const dayMap = new Map<string, {
+            day: string;
+            date: Date;
+            typeCounts: Record<string, number>;
+            severityCounts: { critical: number; warning: number; info: number };
+          }>();
 
           snapshot.docs.forEach((doc) => {
             const data = doc.data();
-            const dateStr = data.date || doc.id;
-            let date: Date;
-
-            // Parse date string (YYYYMMDD format)
-            if (typeof dateStr === "string" && dateStr.length === 8) {
-              const year = parseInt(dateStr.substring(0, 4));
-              const month = parseInt(dateStr.substring(4, 6)) - 1;
-              const day = parseInt(dateStr.substring(6, 8));
-              date = new Date(year, month, day);
-            } else if (data.updated_at?.toDate) {
-              date = data.updated_at.toDate();
-            } else {
-              date = new Date();
-            }
-
-            const trendItem: TrendDataItem = {
-              day: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-            };
-
-            // Extract counts by type - handle both structured (by_type) and flat (summary) formats
-            let byType: Record<string, number> = {};
+            const startedAt = data.started_at?.toDate?.() || new Date();
+            const runDate = startedAt instanceof Date ? startedAt : new Date(startedAt);
             
-            if (data.by_type) {
-              // Structured format: data.by_type exists
-              byType = data.by_type;
-            } else if (data.counts?.by_type) {
-              // Nested format: data.counts.by_type exists
-              byType = data.counts.by_type;
-            } else {
-              // Flat format: parse keys like "duplicate", "duplicate:critical", "missing_link:warning"
-              // Aggregate by issue type (ignore severity suffixes)
-              const typeCounts: Record<string, number> = {};
-              Object.entries(data).forEach(([key, value]) => {
-                // Skip non-numeric values and special keys
-                if (typeof value !== 'number' || key === 'date' || key === 'updated_at' || key === 'total') {
-                  return;
-                }
-                
-                // Parse key format: "issue_type", "issue_type:severity", or "issue_type:total"
-                const parts = key.split(':');
-                const issueType = parts[0];
-                
-                // Only count the base type (not severity-specific counts)
-                // This gives us total counts per issue type
-                if (parts.length === 1) {
-                  // Direct type count (e.g., "duplicate": 10)
-                  typeCounts[issueType] = (typeCounts[issueType] || 0) + value;
-                } else if (parts.length === 2) {
-                  // Type:severity or type:total format (e.g., "duplicate:critical": 5, "attendance:total": 10)
-                  // For :total keys, use the value directly (it's already the total)
-                  // For :severity keys, aggregate all severities for the type
-                  if (parts[1] === 'total') {
-                    // Use the total value directly (don't aggregate with severity counts)
-                    typeCounts[issueType] = value;
-                  } else {
-                    // Aggregate severity counts for the type
-                    typeCounts[issueType] = (typeCounts[issueType] || 0) + value;
-                  }
+            // Get date key (YYYY-MM-DD format for grouping)
+            const dateKey = runDate.toISOString().split('T')[0];
+            const dayLabel = runDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            
+            // Get counts from run
+            const counts = data.counts || {};
+            const byType = counts.by_type || {};
+            const bySeverity = counts.by_severity || {};
+            
+            // Initialize day entry if not exists
+            if (!dayMap.has(dateKey)) {
+              dayMap.set(dateKey, {
+                day: dayLabel,
+                date: new Date(runDate.getFullYear(), runDate.getMonth(), runDate.getDate()),
+                typeCounts: {},
+                severityCounts: { critical: 0, warning: 0, info: 0 },
+              });
+            }
+            
+            const dayEntry = dayMap.get(dateKey)!;
+            
+            // Since runs are sorted descending (newest first), the first run we see for each day
+            // is the most recent run for that day. Use that run's counts.
+            // For today specifically, always use the most recent run (first one we encounter)
+            const isToday = dateKey === new Date().toISOString().split('T')[0];
+            const isFirstRunForDay = Object.keys(dayEntry.typeCounts).length === 0;
+            
+            if (isFirstRunForDay) {
+              // Use this run's counts (most recent for this day)
+              Object.entries(byType).forEach(([type, count]) => {
+                if (typeof count === 'number') {
+                  dayEntry.typeCounts[type] = count;
                 }
               });
-              byType = typeCounts;
-            }
-
-            // Add all issue types found in the data
-            Object.entries(byType).forEach(([type, count]) => {
-              if (typeof count === 'number' && count > 0) {
-                trendItem[type] = count;
-              }
-            });
-
-            // Ensure common types exist for consistency if needed, but 0 is fine
-            // We rely on the graph to pick up keys
-
-            trendData.push(trendItem);
-
-            // Use most recent document for severity counts
-            if (snapshot.docs.indexOf(doc) === 0) {
-              latestSeverity = {
-                critical: data.by_severity?.critical || data.counts?.by_severity?.critical || 0,
-                warning: data.by_severity?.warning || data.counts?.by_severity?.warning || 0,
-                info: data.by_severity?.info || data.counts?.by_severity?.info || 0,
+              
+              // Update severity counts
+              dayEntry.severityCounts = {
+                critical: bySeverity.critical || 0,
+                warning: bySeverity.warning || 0,
+                info: bySeverity.info || 0,
               };
+            } else if (isToday) {
+              // For today, if we see a newer run, update to use it (runs are sorted desc, so this shouldn't happen)
+              // But just in case, we'll keep the first one (most recent) we saw
             }
           });
 
-          // Reverse to show chronological order
-          setTrends(trendData.reverse());
+          // Convert to trend data array and sort by date
+          const trendData: TrendDataItem[] = Array.from(dayMap.values())
+            .sort((a, b) => a.date.getTime() - b.date.getTime())
+            .map((entry) => {
+              const trendItem: TrendDataItem = {
+                day: entry.day,
+              };
+              
+              // Add all issue types
+              Object.entries(entry.typeCounts).forEach(([type, count]) => {
+                if (count > 0) {
+                  trendItem[type] = count;
+                }
+              });
+              
+              return trendItem;
+            });
+
+          // Get latest severity counts (from today's run if available, otherwise most recent)
+          let latestSeverity = { critical: 0, warning: 0, info: 0 };
+          const todayKey = new Date().toISOString().split('T')[0];
+          const todayEntry = dayMap.get(todayKey);
+          if (todayEntry) {
+            latestSeverity = todayEntry.severityCounts;
+          } else if (dayMap.size > 0) {
+            // Use most recent day's severity counts
+            const sortedEntries = Array.from(dayMap.values())
+              .sort((a, b) => b.date.getTime() - a.date.getTime());
+            if (sortedEntries.length > 0) {
+              latestSeverity = sortedEntries[0].severityCounts;
+            }
+          }
+
+          setTrends(trendData);
           setSeverityCounts(latestSeverity);
           setLoading(false);
           setError(null);
         } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to process metrics");
+          setError(err instanceof Error ? err.message : "Failed to process run data");
           setLoading(false);
         }
       },

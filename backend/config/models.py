@@ -19,6 +19,7 @@ class FieldRequirement(BaseModel):
     alternate_fields: Optional[List[str]] = None
     condition_field: Optional[str] = None
     condition_value: Optional[str] = None
+    rule_id: Optional[str] = None  # Added to support Firestore rule IDs for filtering
 
 
 class RelationshipRule(BaseModel):

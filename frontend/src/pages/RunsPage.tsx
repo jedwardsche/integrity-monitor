@@ -21,6 +21,8 @@ export function RunsPage() {
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [scanConfigOpen, setScanConfigOpen] = useState(false);
+  const [cancellingAll, setCancellingAll] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState("");
@@ -333,6 +335,124 @@ export function RunsPage() {
     setScanConfigOpen(true);
   };
 
+  const handleCancelAll = async () => {
+    if (
+      !confirm(
+        "Are you sure you want to cancel all currently running scans? This action cannot be undone."
+      )
+    ) {
+      return;
+    }
+
+    setCancellingAll(true);
+    try {
+      const token = await getToken();
+      if (!token) {
+        alert("Authentication required. Please sign in again.");
+        setCancellingAll(false);
+        return;
+      }
+
+      const response = await fetch(`${API_BASE}/integrity/runs/cancel-all`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: "Failed to cancel all runs" }));
+        throw new Error(
+          errorData.error ||
+            errorData.detail?.error ||
+            "Failed to cancel all runs"
+        );
+      }
+
+      const result = await response.json();
+      alert(
+        `Successfully cancelled ${result.cancelled_count || 0} running scan(s).`
+      );
+    } catch (error) {
+      console.error("Failed to cancel all runs:", error);
+      let errorMessage = "Unknown error";
+      if (error instanceof TypeError && error.message.includes("fetch")) {
+        errorMessage =
+          "Backend server is not available. Please ensure the backend is running.";
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      alert(`Failed to cancel all runs: ${errorMessage}`);
+    } finally {
+      setCancellingAll(false);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (
+      !confirm(
+        "Are you sure you want to delete ALL runs? This action cannot be undone and will delete all scan history."
+      )
+    ) {
+      return;
+    }
+
+    if (
+      !confirm(
+        "This is your final warning. Are you absolutely sure you want to delete ALL runs?"
+      )
+    ) {
+      return;
+    }
+
+    setDeletingAll(true);
+    try {
+      const token = await getToken();
+      if (!token) {
+        alert("Authentication required. Please sign in again.");
+        setDeletingAll(false);
+        return;
+      }
+
+      const response = await fetch(`${API_BASE}/integrity/runs/all`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: "Failed to delete all runs" }));
+        throw new Error(
+          errorData.error ||
+            errorData.detail?.error ||
+            "Failed to delete all runs"
+        );
+      }
+
+      const result = await response.json();
+      alert(`Successfully deleted ${result.deleted_count || 0} run(s).`);
+    } catch (error) {
+      console.error("Failed to delete all runs:", error);
+      let errorMessage = "Unknown error";
+      if (error instanceof TypeError && error.message.includes("fetch")) {
+        errorMessage =
+          "Backend server is not available. Please ensure the backend is running.";
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      alert(`Failed to delete all runs: ${errorMessage}`);
+    } finally {
+      setDeletingAll(false);
+    }
+  };
+
   const executeScan = async (config: ScanConfig) => {
     setScanConfigOpen(false);
     try {
@@ -342,16 +462,27 @@ export function RunsPage() {
         return;
       }
 
-      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
       const params = new URLSearchParams({
         trigger: "manual",
       });
 
-      // Add entities if specified
+      // Build run_config
+      const runConfig: any = {};
       if (config.entities && config.entities.length > 0) {
+        runConfig.entities = config.entities;
+        // Also add to query params for backward compatibility
         config.entities.forEach((entity) => {
           params.append("entities", entity);
         });
+      }
+      if (config.rules) {
+        runConfig.rules = config.rules;
+      }
+
+      // Build request body
+      const requestBody: any = {};
+      if (Object.keys(runConfig).length > 0) {
+        requestBody.run_config = runConfig;
       }
 
       const response = await fetch(
@@ -362,6 +493,10 @@ export function RunsPage() {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
+          body:
+            Object.keys(requestBody).length > 0
+              ? JSON.stringify(requestBody)
+              : undefined,
         }
       );
 
@@ -475,22 +610,114 @@ export function RunsPage() {
             View status and log details for all integrity scans
           </p>
         </div>
-        <button
-          onClick={handleRunScan}
-          className="rounded-lg bg-[var(--brand)] px-4 py-2 text-white font-medium hover:bg-[var(--brand)]/90 transition-colors flex items-center gap-2"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            height="20px"
-            viewBox="0 -960 960 960"
-            width="20px"
-            className="w-5 h-5 flex-shrink-0"
-            fill="currentColor"
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleCancelAll}
+            disabled={cancellingAll}
+            className="rounded-lg bg-yellow-600 px-4 py-2 text-white font-medium hover:bg-yellow-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <path d="M200-800v241-1 400-640 200-200Zm0 720q-33 0-56.5-23.5T120-160v-640q0-33 23.5-56.5T200-880h320l240 240v100q-19-8-39-12.5t-41-6.5v-41H480v-200H200v640h241q16 24 36 44.5T521-80H200Zm460-120q42 0 71-29t29-71q0-42-29-71t-71-29q-42 0-71 29t-29 71q0 42 29 71t71 29ZM864-40 756-148q-21 14-45.5 21t-50.5 7q-75 0-127.5-52.5T480-300q0-75 52.5-127.5T660-480q75 0 127.5 52.5T840-300q0 26-7 50.5T812-204L920-96l-56 56Z" />
-          </svg>
-          Run Scan
-        </button>
+            {cancellingAll ? (
+              <>
+                <svg
+                  className="animate-spin h-5 w-5"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  ></circle>
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+                Cancelling...
+              </>
+            ) : (
+              <>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  height="20px"
+                  viewBox="0 -960 960 960"
+                  width="20px"
+                  className="w-5 h-5 flex-shrink-0"
+                  fill="currentColor"
+                >
+                  <path d="M280-120v-520h-80v-280h360l80 80v200h80v280h-80v280H280Zm80-400h200v-200H360v200Zm0 320h200v-200H360v200Z" />
+                </svg>
+                Cancel All Running
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleDeleteAll}
+            disabled={deletingAll}
+            className="rounded-lg bg-red-600 px-4 py-2 text-white font-medium hover:bg-red-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {deletingAll ? (
+              <>
+                <svg
+                  className="animate-spin h-5 w-5"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  ></circle>
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+                Deleting...
+              </>
+            ) : (
+              <>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  height="20px"
+                  viewBox="0 -960 960 960"
+                  width="20px"
+                  className="w-5 h-5 flex-shrink-0"
+                  fill="currentColor"
+                >
+                  <path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z" />
+                </svg>
+                Delete All Runs
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleRunScan}
+            className="rounded-lg bg-[var(--brand)] px-4 py-2 text-white font-medium hover:bg-[var(--brand)]/90 transition-colors flex items-center gap-2"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              height="20px"
+              viewBox="0 -960 960 960"
+              width="20px"
+              className="w-5 h-5 flex-shrink-0"
+              fill="currentColor"
+            >
+              <path d="M200-800v241-1 400-640 200-200Zm0 720q-33 0-56.5-23.5T120-160v-640q0-33 23.5-56.5T200-880h320l240 240v100q-19-8-39-12.5t-41-6.5v-41H480v-200H200v640h241q16 24 36 44.5T521-80H200Zm460-120q42 0 71-29t29-71q0-42-29-71t-71-29q-42 0-71 29t-29 71q0 42 29 71t71 29ZM864-40 756-148q-21 14-45.5 21t-50.5 7q-75 0-127.5-52.5T480-300q0-75 52.5-127.5T660-480q75 0 127.5 52.5T840-300q0 26-7 50.5T812-204L920-96l-56 56Z" />
+            </svg>
+            Run Scan
+          </button>
+        </div>
       </div>
 
       {/* Filter Section */}

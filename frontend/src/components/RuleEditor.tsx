@@ -3,24 +3,50 @@ import { useState, useEffect } from "react";
 interface RuleEditorProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (ruleData: Record<string, any>) => void;
-  category: string;
+  onSave: (ruleData: Record<string, any>, category: string, entity: string | null) => void;
+  category?: string;
   entity?: string;
   initialRule?: Record<string, any>;
   mode: "create" | "edit";
+  currentEntity?: string; // Current table being viewed
 }
+
+const ENTITY_OPTIONS = [
+  { value: "students", label: "Students" },
+  { value: "parents", label: "Parents" },
+  { value: "contractors", label: "Contractors" },
+  { value: "classes", label: "Classes" },
+  { value: "attendance", label: "Attendance" },
+  { value: "truth", label: "Truth" },
+  { value: "student_truth", label: "Student Truth" },
+  { value: "payments", label: "Payments" },
+];
+
+const CATEGORY_OPTIONS = [
+  { value: "duplicates", label: "Duplicate Detection" },
+  { value: "relationships", label: "Relationship" },
+  { value: "required_fields", label: "Required Field" },
+  { value: "attendance_rules", label: "Attendance Rule" },
+];
 
 export function RuleEditor({
   isOpen,
   onClose,
   onSave,
-  category,
-  entity,
+  category: initialCategory,
+  entity: initialEntity,
   initialRule,
   mode,
+  currentEntity,
 }: RuleEditorProps) {
   const [ruleData, setRuleData] = useState<Record<string, any>>(
     initialRule || {}
+  );
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    initialCategory || "duplicates"
+  );
+  const [selectedEntity, setSelectedEntity] = useState<string>(
+    initialEntity || currentEntity || "students"
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -30,25 +56,28 @@ export function RuleEditor({
     } else {
       setRuleData({});
     }
+    setSelectedCategory(initialCategory || "duplicates");
+    setSelectedEntity(initialEntity || currentEntity || "students");
     setErrors({});
-  }, [initialRule, isOpen]);
+  }, [initialRule, initialCategory, initialEntity, currentEntity, isOpen]);
 
   if (!isOpen) return null;
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (category === "duplicates") {
+    if (selectedCategory === "duplicates") {
       if (!ruleData.description)
         newErrors.description = "Description is required";
-      if (!ruleData.rule_id) newErrors.rule_id = "Rule ID is required";
+      if (!ruleData.rule_id && mode === "create")
+        newErrors.rule_id = "Rule ID is required";
       if (!ruleData.conditions || ruleData.conditions.length === 0) {
         newErrors.conditions = "At least one condition is required";
       }
-    } else if (category === "relationships") {
+    } else if (selectedCategory === "relationships") {
       if (!ruleData.target) newErrors.target = "Target entity is required";
       if (!ruleData.message) newErrors.message = "Message is required";
-    } else if (category === "required_fields") {
+    } else if (selectedCategory === "required_fields") {
       if (!ruleData.field) newErrors.field = "Field name is required";
       if (!ruleData.message) newErrors.message = "Message is required";
     }
@@ -59,7 +88,7 @@ export function RuleEditor({
 
   const handleSave = () => {
     if (validate()) {
-      onSave(ruleData);
+      onSave(ruleData, selectedCategory, selectedEntity);
       handleClose();
     }
   };
@@ -85,15 +114,17 @@ export function RuleEditor({
     <>
       <div>
         <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
-          Rule ID *
+          Rule ID {mode === "create" && "*"}
         </label>
         <input
           type="text"
           value={ruleData.rule_id || ""}
           onChange={(e) => updateField("rule_id", e.target.value)}
+          disabled={mode === "edit"}
+          placeholder="e.g., dup.student.email_match"
           className={`w-full p-2 border rounded-lg ${
             errors.rule_id ? "border-red-500" : "border-[var(--border)]"
-          }`}
+          } ${mode === "edit" ? "bg-gray-100" : ""}`}
         />
         {errors.rule_id && (
           <p className="text-red-500 text-xs mt-1">{errors.rule_id}</p>
@@ -106,6 +137,7 @@ export function RuleEditor({
         <textarea
           value={ruleData.description || ""}
           onChange={(e) => updateField("description", e.target.value)}
+          placeholder="Describe what this rule detects"
           className={`w-full p-2 border rounded-lg ${
             errors.description ? "border-red-500" : "border-[var(--border)]"
           }`}
@@ -120,18 +152,17 @@ export function RuleEditor({
           Severity
         </label>
         <select
-          value={ruleData.severity || "warning"}
+          value={ruleData.severity || "likely"}
           onChange={(e) => updateField("severity", e.target.value)}
           className="w-full p-2 border border-[var(--border)] rounded-lg"
         >
-          <option value="info">Info</option>
-          <option value="warning">Warning</option>
-          <option value="critical">Critical</option>
+          <option value="likely">Likely (High Confidence)</option>
+          <option value="possible">Possible (Low Confidence)</option>
         </select>
       </div>
       <div>
         <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
-          Conditions (JSON)
+          Conditions (JSON) *
         </label>
         <textarea
           value={JSON.stringify(ruleData.conditions || [], null, 2)}
@@ -142,6 +173,7 @@ export function RuleEditor({
               // Invalid JSON, keep as is
             }
           }}
+          placeholder='[{"field": "email", "match_type": "exact"}, ...]'
           className={`w-full p-2 border rounded-lg font-mono text-sm ${
             errors.conditions ? "border-red-500" : "border-[var(--border)]"
           }`}
@@ -160,14 +192,20 @@ export function RuleEditor({
         <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
           Target Entity *
         </label>
-        <input
-          type="text"
+        <select
           value={ruleData.target || ""}
           onChange={(e) => updateField("target", e.target.value)}
           className={`w-full p-2 border rounded-lg ${
             errors.target ? "border-red-500" : "border-[var(--border)]"
           }`}
-        />
+        >
+          <option value="">Select target table...</option>
+          {ENTITY_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
         {errors.target && (
           <p className="text-red-500 text-xs mt-1">{errors.target}</p>
         )}
@@ -179,6 +217,7 @@ export function RuleEditor({
         <textarea
           value={ruleData.message || ""}
           onChange={(e) => updateField("message", e.target.value)}
+          placeholder="Error message when rule is violated"
           className={`w-full p-2 border rounded-lg ${
             errors.message ? "border-red-500" : "border-[var(--border)]"
           }`}
@@ -204,7 +243,7 @@ export function RuleEditor({
         </div>
         <div>
           <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
-            Max Links
+            Max Links (optional)
           </label>
           <input
             type="number"
@@ -216,7 +255,7 @@ export function RuleEditor({
               )
             }
             className="w-full p-2 border border-[var(--border)] rounded-lg"
-            placeholder="Optional"
+            placeholder="Unlimited"
           />
         </div>
       </div>
@@ -229,7 +268,7 @@ export function RuleEditor({
             className="w-4 h-4"
           />
           <span className="text-sm font-medium text-[var(--text-main)]">
-            Require Active
+            Require Active Links Only
           </span>
         </label>
       </div>
@@ -246,6 +285,7 @@ export function RuleEditor({
           type="text"
           value={ruleData.field || ""}
           onChange={(e) => updateField("field", e.target.value)}
+          placeholder="e.g., email, phone, emergency_contact"
           className={`w-full p-2 border rounded-lg ${
             errors.field ? "border-red-500" : "border-[var(--border)]"
           }`}
@@ -261,6 +301,7 @@ export function RuleEditor({
         <textarea
           value={ruleData.message || ""}
           onChange={(e) => updateField("message", e.target.value)}
+          placeholder="Error message when field is missing"
           className={`w-full p-2 border rounded-lg ${
             errors.message ? "border-red-500" : "border-[var(--border)]"
           }`}
@@ -308,7 +349,7 @@ export function RuleEditor({
   );
 
   const renderFields = () => {
-    switch (category) {
+    switch (selectedCategory) {
       case "duplicates":
         return renderDuplicateFields();
       case "relationships":
@@ -345,7 +386,53 @@ export function RuleEditor({
           </button>
         </div>
 
-        <div className="space-y-4">{renderFields()}</div>
+        <div className="space-y-4">
+          {/* Rule Type Selection (only for create mode) */}
+          {mode === "create" && (
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+                Rule Type *
+              </label>
+              <select
+                value={selectedCategory}
+                onChange={(e) => {
+                  setSelectedCategory(e.target.value);
+                  setRuleData({}); // Reset rule data when changing category
+                }}
+                className="w-full p-2 border border-[var(--border)] rounded-lg"
+              >
+                {CATEGORY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Table Selection (only for create mode and non-attendance rules) */}
+          {mode === "create" && selectedCategory !== "attendance_rules" && (
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-main)] mb-2">
+                Table *
+              </label>
+              <select
+                value={selectedEntity}
+                onChange={(e) => setSelectedEntity(e.target.value)}
+                className="w-full p-2 border border-[var(--border)] rounded-lg"
+              >
+                {ENTITY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Rule-specific fields */}
+          {renderFields()}
+        </div>
 
         <div className="mt-6 flex gap-3">
           <button
