@@ -41,12 +41,13 @@ gcloud run deploy "${SERVICE_NAME}" \
   --region "${REGION}" \
   --platform managed \
   --allow-unauthenticated \
-  --memory 1Gi \
-  --cpu 1 \
-  --timeout 15m \
+  --memory 4Gi \
+  --cpu 2 \
+  --timeout 30m \
   --min-instances 0 \
   --max-instances 10 \
-  --set-env-vars "ALLOWED_ORIGINS=*" \
+  --concurrency 80 \
+  --set-env-vars "ALLOWED_ORIGINS=*,AIRTABLE_MIN_REQUEST_INTERVAL=0.05" \
   --set-secrets "AIRTABLE_PAT=AIRTABLE_PAT:latest" \
   --set-secrets "API_AUTH_TOKEN=API_AUTH_TOKEN:latest" \
   --set-secrets "OPENAI_API_KEY=OPENAI_API_KEY:latest" \
